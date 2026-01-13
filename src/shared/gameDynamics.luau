@@ -1,0 +1,563 @@
+-- // Copyright 2026, DeutscherKaleun, All rights reserved. 
+local repStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local workspace = game:GetService("Workspace")
+
+local remoteEvent = repStorage:WaitForChild("RemoteEvent")
+local turnIndex = repStorage:WaitForChild("turnIndex")
+local turnOrder = {"red", "blue", "green", "yellow"} -- Standard Ludo Order
+local currentMap = workspace:WaitForChild("CurrentMap"):FindFirstChildOfClass("Folder")
+
+-- Animation Cache
+local animCache = {} 
+
+local gameDynamics = {} 
+
+-- Turn State
+local activePlayer = nil 
+local playerHasRolled = false 
+local playerHasPicked = false
+local pickedFig = nil
+
+-- Configuration
+local BOARD_SIZE = 40 -- Standard Ludo board
+local START_OFFSETS = {
+	["red"] = 1,    -- Red starts at tile 1 (adjust based on your map map names)
+	["blue"] = 11,
+	["green"] = 21,
+	["yellow"] = 31
+}
+
+-- [1. Single Permanent Listener] 
+remoteEvent.OnServerEvent:Connect(function(player, action, fig)
+	if player == activePlayer then
+		if action == "RollButtonPressed" then
+			playerHasRolled = true
+		elseif action == "FigureChosen" and fig then
+			pickedFig = fig
+			playerHasPicked = true
+		end
+	end
+end)
+
+-- [2. Helper: Wait for Input]
+function waitForPlayerInput(player, action, validFigures)
+	if not player or not player.Parent then return nil end
+
+	activePlayer = player 
+	local timeOut = 15 -- Give them time
+	local step = 0.1 
+
+	if action == "diceRoll" then
+		playerHasRolled = false 
+		remoteEvent:FireClient(player, {Msg = "GuiChange:RollButtonAppear"})
+
+		local rolled = false
+		for i = timeOut, 0, -step do
+			if not player.Parent then break end
+			if playerHasRolled then 
+				rolled = true
+				break 
+			end
+			if math.floor(i) ~= math.floor(i + step) then
+				remoteEvent:FireClient(player, {Msg = "GuiChange:TimeLeftUpdate", TimeLeft = math.ceil(i)})
+			end
+			task.wait(step)
+		end
+
+		remoteEvent:FireClient(player, {Msg = "GuiChange:HideRollButton"}) 
+		return rolled 
+
+	elseif action == "chooseFigure" then
+		playerHasPicked = false
+		pickedFig = nil
+
+		-- Only show buttons for VALID figures
+		remoteEvent:FireClient(player, {Msg = "GuiChange:ShowFigureButtons", validFigures = validFigures})
+
+		local selected = nil
+		for i = timeOut, 0, -step do
+			if not player.Parent then break end
+
+			if playerHasPicked and pickedFig then
+				-- Server-side validation: Is the picked figure actually in the valid list?
+				if table.find(validFigures, pickedFig) then
+					selected = pickedFig
+					break
+				else
+					print("Player tried to pick invalid figure")
+					playerHasPicked = false -- Reset and wait
+				end
+			end
+
+			if math.floor(i) ~= math.floor(i + step) then
+				remoteEvent:FireClient(player, {Msg = "GuiChange:TimeLeftUpdate", TimeLeft = math.ceil(i)})
+			end
+			task.wait(step)
+		end
+
+		activePlayer = nil
+		remoteEvent:FireClient(player, {Msg = "GuiChange:HideFigureButtons"})
+		return selected
+	end
+end
+
+-- [3. Helper: Animation]
+local function getAnimTrack(animator, assetId)
+	local cacheKey = tostring(animator.Parent.Parent) .. "_" .. assetId 
+	if animCache[cacheKey] then return animCache[cacheKey] end
+	local anim = Instance.new("Animation")
+	anim.AnimationId = assetId
+	local track = animator:LoadAnimation(anim)
+	animCache[cacheKey] = track
+	return track
+end
+
+-- [4. Logic: Coordinate System]
+-- Calculates where a figure lands based on steps taken
+function calculateTargetTile(color, currentSteps, diceRoll)
+	local newSteps = currentSteps + diceRoll
+
+	-- Check if overshoot (Goal is at step 40 to 44 usually)
+	-- Assumption: 0-39 are board steps. 40+ represent the house slots.
+	if newSteps > 43 then return nil end -- Cannot move, overshot
+
+	local startOffset = START_OFFSETS[color]
+	local boardIndex = nil
+	local isGoal = false
+
+	if newSteps < 40 then
+		-- Still on main board
+		-- FIXED FORMULA: Removed the "- 1". 
+		-- Step 0 (Start) + 1 (Roll) should equal Tile 2, not Tile 1.
+		boardIndex = (startOffset + newSteps) % BOARD_SIZE
+
+		-- Lua Modulo returns 0 for the last item (40), so we fix it to 40.
+		if boardIndex == 0 then boardIndex = BOARD_SIZE end 
+	else
+		-- In Goal Strip
+		isGoal = true
+		boardIndex = (newSteps - 39) -- Returns 1, 2, 3, or 4
+	end
+
+	return boardIndex, isGoal, newSteps
+end
+
+function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTeleport)
+	local humanoid = figure:WaitForChild("Humanoid")
+	local animator = humanoid:WaitForChild("Animator")
+
+	-- Determine Final Target (for reference)
+	local finalTargetPart = nil
+	if isGoal then
+		finalTargetPart = currentMap["Spielfeld" .. color:sub(1,1):upper()..color:sub(2)].goalFields:FindFirstChild(tostring(targetIndex))
+	else
+		finalTargetPart = currentMap.Fields:FindFirstChild(tostring(targetIndex))
+	end
+
+	if shouldTeleport then
+		-- >>> TELEPORT LOGIC (House -> Start) <<<
+		if finalTargetPart then
+			-- Force Y to +3 studs above the tile to prevent floor clipping
+			local targetPosition = finalTargetPart.Position + Vector3.new(0, 3, 0)
+
+			-- Get Y rotation of the tile so figure faces the right way
+			local _, targetY, _ = finalTargetPart.CFrame:ToOrientation()
+			local cleanRotation = CFrame.Angles(0, targetY, 0)
+
+			if figure.PrimaryPart then
+				figure:PivotTo(CFrame.new(targetPosition) * cleanRotation)
+				figure.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+				figure.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+			end
+		end
+	else
+		-- >>> SEQUENTIAL WALKING LOGIC (Board Movement) <<<
+		local currentSteps = figure:GetAttribute("stepsTaken") or 0
+		local stepsToWalk = newStepsTotal - currentSteps
+
+		-- Safety Check: Ensure we have something to walk with
+		if not figure.PrimaryPart then
+			warn("CRITICAL: Figure " .. figure.Name .. " is missing PrimaryPart! Cannot walk.")
+			return -- Abort to prevent crash
+		end
+
+		local walkTrack = getAnimTrack(animator, "rbxassetid://913376220")
+		walkTrack.Looped = true
+		walkTrack:Play()
+
+		-- Loop through steps
+		for i = 1, stepsToWalk do
+			-- CRITICAL SAFETY CHECK INSIDE LOOP
+			if not figure or not figure.Parent or not figure.PrimaryPart then
+				warn("Figure destroyed or fell into void during movement.")
+				break
+			end
+
+			-- Calculate the tile for THIS specific intermediate step
+			local stepIndex, stepIsGoal, _ = calculateTargetTile(color, currentSteps, i)
+
+			local nextPart = nil
+			if stepIsGoal then
+				nextPart = currentMap["Spielfeld" .. color:sub(1,1):upper()..color:sub(2)].goalFields:FindFirstChild(tostring(stepIndex))
+			else
+				nextPart = currentMap.Fields:FindFirstChild(tostring(stepIndex))
+			end
+
+			if nextPart then
+				-- RESCUE: Use the TILE'S height, not the FIGURE'S height.
+				-- This fixes the issue where falling figures (-9 Y) stay falling.
+				local lookPos = Vector3.new(nextPart.Position.X, nextPart.Position.Y + 0.5, nextPart.Position.Z)
+				local myPos = figure.PrimaryPart.Position
+
+				-- Only look; don't change position yet, let MoveTo handle the translation
+				-- BUT: If we are underground (Y < -2), snap us up first
+				if myPos.Y < -2 then
+					figure:PivotTo(CFrame.new(myPos.X, nextPart.Position.Y + 3, myPos.Z))
+				end
+
+				-- Smooth LookAt (ignoring tilt)
+				local lookCFrame = CFrame.lookAt(figure.PrimaryPart.Position, lookPos)
+				local _, yRot, _ = lookCFrame:ToOrientation()
+				figure:PivotTo(CFrame.new(figure.PrimaryPart.Position) * CFrame.Angles(0, yRot, 0))
+
+				-- Move
+				humanoid:MoveTo(nextPart.Position)
+
+				-- Wait for arrival
+				local reached = humanoid.MoveToFinished:Wait()
+			end
+		end
+
+		walkTrack:Stop()
+
+		if finalTargetPart and figure.PrimaryPart then
+			-- 1. Get the exact center X and Z of the target tile
+			local targetPos = finalTargetPart.Position
+
+			-- 2. Use the FIGURE'S current Y height. 
+			-- Since the Humanoid just walked there, it is already standing at the correct physics height.
+			-- We don't want to force it to a specific number like "0.5" which might bury it.
+			local currentHeight = figure.PrimaryPart.Position.Y
+
+			-- Safety: If for some reason it's too low (glitched), force it up slightly
+			if currentHeight < targetPos.Y then currentHeight = targetPos.Y + 3 end
+
+			-- 3. Calculate the new World Position (Center of Tile + Safe Height)
+			local finalPosition = Vector3.new(targetPos.X, currentHeight, targetPos.Z)
+
+			-- 4. Calculate Clean Rotation (Face the way the tile is "pointing", but stay upright)
+			local _, targetYRot, _ = finalTargetPart.CFrame:ToOrientation()
+			local cleanRotation = CFrame.Angles(0, targetYRot, 0)
+
+			-- 5. Apply
+			figure:PivotTo(CFrame.new(finalPosition) * cleanRotation)
+
+			-- 6. Kill Velocity to prevent "skating" after the snap
+			figure.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+			figure.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
+	-- Update Data
+	figure:SetAttribute("stepsTaken", newStepsTotal)
+	figure:SetAttribute("tileIndex", isGoal and ("G"..targetIndex) or targetIndex)
+	figure:SetAttribute("isGoal", isGoal)
+
+	return finalTargetPart
+end
+
+function checkCapture(targetTilePart, movingFigure, movingColor)
+	local allFigures = CollectionService:GetTagged("figure")
+	local myTile = movingFigure:GetAttribute("tileIndex")
+
+	-- Debug: Verify the function is actually running
+	print("[Capture Check] Attacker:", movingFigure.Name, "| Tile:", myTile)
+
+	-- 1. Safety: Cannot capture if we are safely inside the Goal (House)
+	if movingFigure:GetAttribute("isGoal") == true then return end 
+
+
+	for _, enemy in ipairs(allFigures) do
+		-- Skip checking ourselves
+		
+		if enemy == movingFigure then continue end
+
+		local enemyTile = enemy:GetAttribute("tileIndex")
+
+
+		print(enemyTile)
+		print(myTile)
+		-- 2. ROBUST COMPARISON: Convert both to string to prevent "15" (String) ~= 15 (Number) errors
+		if tostring(enemyTile) == tostring(myTile) then
+			
+			print("4")
+
+			print("[Capture Check] Collision found with:", enemy.Name)
+
+			-- Extract enemy color from name "Figure_red_1"
+			local enemyColor = enemy.Name:match("Figure_(%a+)_")
+
+			-- 3. Capture Logic: Only if colors are different
+			if enemyColor and enemyColor ~= movingColor then
+				print("⚔️ CAPTURE! Sending " .. enemy.Name .. " home.")
+
+				-- Reset Enemy Attributes
+				enemy:SetAttribute("stepsTaken", -1) -- -1 means Home
+				enemy:SetAttribute("tileIndex", 0)   -- 0 means Home
+
+				
+				-- Find Spawn Location
+				local spawnFolder = currentMap["Spielfeld" .. enemyColor:sub(1,1):upper()..enemyColor:sub(2)].spawnFields
+				local enemyID = tonumber(enemy:GetAttribute("figureID")) or 1
+				local spawnPart = spawnFolder:GetChildren()[enemyID]
+
+
+				-- Physical Teleport
+				if spawnPart then
+					-- Reset velocity so they don't fly away
+					if enemy.PrimaryPart then
+						enemy.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+						enemy.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+					end
+					enemy:PivotTo(CFrame.new(spawnPart.CFrame.x,5,spawnPart.Position.z))
+				end
+
+				-- Optional: Break loop if only 1 capture allowed per tile
+				break 
+			else
+				print("...but it's a friendly figure. Stacking.")
+			end
+		end
+	end
+end
+
+-- [5. Dice Logic]
+function diceFunc(playerAssignments, turnOfColor)
+	
+	local dicePart = workspace.CurrentMap:FindFirstChildWhichIsA("Folder"):FindFirstChild("dicePart")
+	local diceTemplate = repStorage:WaitForChild("Dice")
+
+	local face_table = {
+		[1] = CFrame.Angles(math.rad(0), math.rad(-180), math.rad(0)),
+		[2] = CFrame.Angles(math.rad(0), math.rad(180), math.rad(-90)),
+		[3] = CFrame.Angles(math.rad(-90), math.rad(0), math.rad(0)),
+		[4] = CFrame.Angles(math.rad(-90), math.rad(-180), math.rad(0)),
+		[5] = CFrame.Angles(math.rad(0), math.rad(0), math.rad(90)),
+		[6] = CFrame.Angles(math.rad(0), math.rad(0), math.rad(180))
+	}
+	
+	local diceClone = diceTemplate:Clone()
+	local dicePartClone = diceClone.Dice
+	diceClone.Parent = workspace
+	diceClone:PivotTo(dicePart.CFrame)
+
+	local result = math.random(1, 6)
+
+	-- Physics Impulse
+	dicePartClone.AssemblyLinearVelocity = Vector3.new(math.random(-8,8), math.random(55,75), math.random(-8,8))
+	dicePartClone.AssemblyAngularVelocity = Vector3.new(math.random(-20,20), math.random(-20,20), math.random(-20,20))
+
+	task.wait(0.5)
+
+	-- Snap to result
+	dicePartClone.AlignOrientation.CFrame = face_table[result]
+	dicePartClone.AlignOrientation.Enabled = true
+	dicePartClone.AssemblyLinearVelocity = Vector3.new(0, 15, 0)
+	dicePartClone.AssemblyAngularVelocity = Vector3.zero
+
+
+	-- Notify Clients
+	for _, pTuple in pairs(playerAssignments) do
+		if type(pTuple) == "table" and pTuple[1] then
+			remoteEvent:FireClient(pTuple[1], {Msg = "GuiChange:DiceResult", DiceResult = result, PlrColor = turnOfColor})
+		end
+	end
+	
+	task.wait(2)
+	diceClone:Destroy()
+	
+	return result
+end
+
+
+function isTargetBlockedBySelf(targetIndex, isGoal, myFigures)
+	-- Normalize the value to match how it's stored in Attributes
+	local checkValue = targetIndex
+	if isGoal then
+		checkValue = "G" .. targetIndex -- e.g. "G1", "G2"
+	end
+
+	for _, fig in ipairs(myFigures) do
+		-- Check if another of my figures is already sitting exactly there
+		if fig:GetAttribute("tileIndex") == checkValue then
+			return true -- BLOCKED!
+		end
+	end
+	return false
+end
+
+
+
+
+function countFiguresInHouse(myFigures)
+	local count = 0
+	for _, fig in ipairs(myFigures) do
+		if fig:GetAttribute("stepsTaken") == -1 then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- [6. Main Loop]
+function gameDynamics.StartGameLoop(playerAssignments)
+	turnIndex.Value = 1
+
+	task.spawn(function()
+		while true do
+			local currentColor = turnOrder[turnIndex.Value]
+			local activePlayerTuple = playerAssignments[currentColor]
+
+			if activePlayerTuple ~= 0 and activePlayerTuple[1] and activePlayerTuple[1].Parent then
+
+				local player = activePlayerTuple[1]
+				local myFigures = activePlayerTuple[3]
+				local turnActive = true
+
+				local figureMustClearStart = nil
+
+				while turnActive do
+					-- A. Attempts Logic
+					local attempts = (countFiguresInHouse(myFigures) == 4) and 3 or 1
+					local diceResult = 0
+					local hasValidRoll = false
+
+					for i = 1, attempts do
+						local rolled = waitForPlayerInput(player, "diceRoll")
+						if not rolled then turnActive = false; break end 
+
+						diceResult = diceFunc(playerAssignments, currentColor)
+
+						if attempts == 3 then
+							if diceResult == 6 then hasValidRoll = true; break 
+							else
+								if i < 3 then
+									remoteEvent:FireClient(player, {Msg = "GuiChange:DiceResult", DiceResult = "No 6! ("..i.."/3)", PlrColor = currentColor})
+									task.wait(1)
+								else hasValidRoll = false end
+							end
+						else
+							hasValidRoll = true; break
+						end
+					end
+
+					-- C. Move Validation
+					if not hasValidRoll then
+						turnActive = false
+					else
+						local validMoves = {}
+						local autoPickFigure = nil 
+						local startTileIndex = START_OFFSETS[currentColor]
+
+						-- >>> Helper Function for Adding Moves if NOT blocked <<<
+						local function tryAddMove(fig, tIndex, tIsGoal)
+							if not isTargetBlockedBySelf(tIndex, tIsGoal, myFigures) then
+								table.insert(validMoves, fig)
+								return true
+							end
+							return false
+						end
+
+						if figureMustClearStart then
+							-- Constraint Active
+							local steps = figureMustClearStart:GetAttribute("stepsTaken")
+							local tIndex, tGoal, futureSteps = calculateTargetTile(currentColor, steps, diceResult)
+
+							if futureSteps then
+								tryAddMove(figureMustClearStart, tIndex, tGoal)
+							end
+							figureMustClearStart = nil 
+						else
+							-- Standard Scan
+							for _, fig in ipairs(myFigures) do
+								local steps = fig:GetAttribute("stepsTaken") or -1
+
+								if steps == -1 then
+									-- House Logic
+									if diceResult == 6 then
+										-- Target is always Start Tile (isGoal=false)
+										if tryAddMove(fig, startTileIndex, false) then
+											autoPickFigure = fig 
+											break -- Prioritize Out-Move
+										end
+									end
+								else
+									-- Board Logic
+									local tIndex, tGoal, futureSteps = calculateTargetTile(currentColor, steps, diceResult)
+									if futureSteps then
+										tryAddMove(fig, tIndex, tGoal)
+									end
+								end
+							end
+						end
+
+						-- Execute Move
+						local chosenFig = nil
+
+						-- [Turn Forfeit Logic]
+						if #validMoves == 0 and not autoPickFigure then
+							-- Zug verfällt (Turn Forfeit)
+							remoteEvent:FireClient(player, {Msg = "GuiChange:DiceResult", DiceResult = "Blocked!", PlrColor = currentColor})
+							task.wait(2)
+							-- Turn ends naturally as chosenFig remains nil
+						else
+							-- Proceed
+							if autoPickFigure then
+								chosenFig = autoPickFigure
+								task.wait(0.5) 
+							elseif #validMoves > 0 then
+								if #validMoves == 1 then chosenFig = validMoves[1]
+								else chosenFig = waitForPlayerInput(player, "chooseFigure", validMoves) end
+							end
+						end
+
+						if chosenFig then
+							local currentSteps = chosenFig:GetAttribute("stepsTaken") or -1
+							if currentSteps == -1 then
+								-- TELEPORT (House -> Start)
+								chosenFig:SetAttribute("stepsTaken", 0) 
+								local landingPart = moveFigure(chosenFig, startTileIndex, false, 0, currentColor, true)
+								if landingPart then checkCapture(landingPart, chosenFig, currentColor) end
+								figureMustClearStart = chosenFig
+							else
+								-- WALK (Normal)
+								local tIndex, isGoal, nSteps = calculateTargetTile(currentColor, currentSteps, diceResult)
+								local landingPart = moveFigure(chosenFig, tIndex, isGoal, nSteps, currentColor, false)
+								if not isGoal then checkCapture(landingPart, chosenFig, currentColor) end
+								figureMustClearStart = nil
+							end
+						end
+
+						-- Win Check
+						local countInGoal = 0
+						for _, fig in ipairs(myFigures) do
+							if fig:GetAttribute("isGoal") == true then countInGoal += 1 end
+						end
+						if countInGoal == 4 then
+							remoteEvent:FireAllClients({Msg = "GuiChange:Winner", Winner = currentColor}); return 
+						end
+
+						if diceResult ~= 6 then turnActive = false
+						else remoteEvent:FireClient(player, {Msg = "GuiChange:BonusTurn"}) end
+					end
+				end
+			end
+			if turnIndex.Value >= 4 then turnIndex.Value = 1 else turnIndex.Value += 1 end
+			task.wait(0.5)
+		end
+	end)
+end
+
+return gameDynamics
+ 
