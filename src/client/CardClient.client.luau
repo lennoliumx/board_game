@@ -30,13 +30,25 @@ local function tweenSlot(slot, toExpanded)
 	local offset = slot:GetAttribute("hiddenPosX") or 0
 	local hiddenY = slot:GetAttribute("hiddenY") or 40
 	local expandedY = slot:GetAttribute("expandedY") or -160
+	local hintY = slot:GetAttribute("hintY") or (hiddenY - 20)
 	local hW = slot:GetAttribute("hiddenSizeX") or 120
 	local hH = slot:GetAttribute("hiddenSizeY") or 160
 	local eW = slot:GetAttribute("expandedSizeX") or 180
 	local eH = slot:GetAttribute("expandedSizeY") or 260
+	local isHinted = slotStates[slot] and slotStates[slot].hinted == true
 
-	local goalPos = toExpanded and UDim2.new(0.5, offset, 1, expandedY) or UDim2.new(0.5, offset, 1, hiddenY)
-	local goalSize = toExpanded and UDim2.new(0, eW, 0, eH) or UDim2.new(0, hW, 0, hH)
+	local goalPos
+	local goalSize
+	if toExpanded then
+		goalPos = UDim2.new(0.5, offset, 1, expandedY)
+		goalSize = UDim2.new(0, eW, 0, eH)
+	elseif isHinted then
+		goalPos = UDim2.new(0.5, offset, 1, hintY)
+		goalSize = UDim2.new(0, hW, 0, hH)
+	else
+		goalPos = UDim2.new(0.5, offset, 1, hiddenY)
+		goalSize = UDim2.new(0, hW, 0, hH)
+	end
 
 	local props = {Position = goalPos, Size = goalSize}
 	local tween = TweenService:Create(slot, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props)
@@ -71,6 +83,10 @@ local function tweenSlotHint(slot, toHinted)
 	local hH = slot:GetAttribute("hiddenSizeY") or 160
 	local goalPos = UDim2.new(0.5, offset, 1, toHinted and hintY or hiddenY)
 	local goalSize = UDim2.new(0, hW, 0, hH)
+	
+	-- Only tween if position is actually different from current position
+	if slot.Position == goalPos then return end
+	
 	local tween = TweenService:Create(slot, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = goalPos, Size = goalSize})
 	pcall(function() tween:Play() end)
 
