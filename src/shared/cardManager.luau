@@ -20,6 +20,30 @@ local pendingCardUse = {} -- userId -> {uid=..., cardId=...}
 local deckProvider = nil -- optional function(player) -> {cardId,...}
 local moveApi = nil
 
+local function dedupeHand(hand)
+    local seen = {}
+    local i = 1
+    while i <= #hand do
+        local id = hand[i] and hand[i].id
+        if id and seen[id] then
+            table.remove(hand, i)
+        else
+            if id then seen[id] = true end
+            i += 1
+        end
+    end
+end
+
+function cardManager.NormalizeHand(player)
+    if not player then return end
+    local hand = cardManager.GetPlayerHand(player)
+    local before = #hand
+    dedupeHand(hand)
+    if #hand ~= before then
+        remoteEvent:FireClient(player, { Msg = "CardHandUpdate", Cards = hand })
+    end
+end
+
 -- Utilities
 local function makeUid(id)
     return id.."_"..tostring(tick()).."_"..tostring(math.random(1,99999))
@@ -31,6 +55,13 @@ function cardManager.RegisterCard(cardModule)
 end
 
 function cardManager.Initialize(assignments)
+    -- Clear all player hands and state for new round
+    for k in pairs(playerHands) do playerHands[k] = nil end
+    for k in pairs(lastUsedTurn) do lastUsedTurn[k] = nil end
+    for k in pairs(pendingCardUse) do pendingCardUse[k] = nil end
+    for k in pairs(colorToPlayer) do colorToPlayer[k] = nil end
+    for k in pairs(playerToColor) do playerToColor[k] = nil end
+
     -- assignments expected to be the same structure returned from roundSys.spawnChars
     -- map color -> {player, char, figures}
     local playerCount = 0
@@ -81,22 +112,29 @@ end
 function cardManager.GiveSpecificCard(player, cardId)
     if not player then return false, "no player" end
     if not cardId or not cardsRegistry[cardId] then return false, "invalid card" end
+    cardManager.NormalizeHand(player)
     if not cardManager.CanAddCard(player) then return false, "hand full" end
+    -- Final duplicate check right before insert
+    local hand = cardManager.GetPlayerHand(player)
+    for _, v in ipairs(hand) do
+        if v.id == cardId then return false, "duplicate card" end
+    end
 
     local module = cardsRegistry[cardId]
     local uid = makeUid(cardId)
     local entry = { uid = uid, id = module.Id, meta = { Name = module.Name, Description = module.Description, Icon = module.Icon } }
-    table.insert(playerHands[player.UserId], entry)
+    table.insert(hand, entry)
 
     -- Notify client
     remoteEvent:FireClient(player, { Msg = "CardGranted", Card = entry })
-    remoteEvent:FireClient(player, { Msg = "CardHandUpdate", Cards = playerHands[player.UserId] })
+    remoteEvent:FireClient(player, { Msg = "CardHandUpdate", Cards = hand })
     if module.OnAcquire then pcall(module.OnAcquire, player, entry) end
     return true
 end
 
 function cardManager.GiveRandomCardToPlayer(player)
     if not player then return false, "no player" end
+    cardManager.NormalizeHand(player)
     if not cardManager.CanAddCard(player) then return false, "hand full" end
 
     -- Pick random card from registry
@@ -111,7 +149,17 @@ function cardManager.GiveRandomCardToPlayer(player)
         for k, _ in pairs(cardsRegistry) do table.insert(keys, k) end
     end
     if #keys == 0 then return false, "no cards registered" end
-    local choice = keys[math.random(1, #keys)]
+    -- Remove any cards the player already has in hand
+    local filtered = {}
+    local seen = {}
+    for _, k in ipairs(keys) do
+        if not seen[k] and not cardManager.HasCardId(player, k) then
+            seen[k] = true
+            table.insert(filtered, k)
+        end
+    end
+    if #filtered == 0 then return false, "no unique cards available" end
+    local choice = filtered[math.random(1, #filtered)]
     return cardManager.GiveSpecificCard(player, choice)
 end
 

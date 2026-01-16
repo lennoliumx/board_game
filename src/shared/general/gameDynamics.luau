@@ -11,6 +11,36 @@ local cardManager = require(game.ReplicatedStorage.Shared.cardManager)
 
 -- Animation Cache
 local animCache = {} 
+local protectionConns = {}
+
+local function updateProtectionHighlight(fig)
+	if not fig then return end
+	local prot = fig:GetAttribute("protectedTurns") or 0
+	local hl = fig:FindFirstChild("ProtectionHighlight")
+	if prot > 0 then
+		if not hl then
+			hl = Instance.new("Highlight")
+			hl.Name = "ProtectionHighlight"
+			hl.FillColor = Color3.fromRGB(0, 255, 255)
+			hl.OutlineColor = Color3.fromRGB(0, 170, 255)
+			hl.FillTransparency = 0.6
+			hl.OutlineTransparency = 0.1
+			hl.Adornee = fig
+			hl.Parent = fig
+		end
+		hl.Enabled = true
+	else
+		if hl then hl.Enabled = false end
+	end
+end
+
+local function ensureProtectionListener(fig)
+	if not fig or protectionConns[fig] then return end
+	protectionConns[fig] = fig:GetAttributeChangedSignal("protectedTurns"):Connect(function()
+		updateProtectionHighlight(fig)
+	end)
+	updateProtectionHighlight(fig)
+end
 
 local gameDynamics = {} 
 
@@ -461,6 +491,14 @@ end
 -- [6. Main Loop]
 function gameDynamics.StartGameLoop(playerAssignments)
 	turnIndex.Value = 1
+	-- Set up protection visuals on all figures
+	for _, tuple in pairs(playerAssignments) do
+		if type(tuple) == "table" and tuple[3] then
+			for _, fig in ipairs(tuple[3]) do
+				ensureProtectionListener(fig)
+			end
+		end
+	end
 
 	task.spawn(function()
 		while true do
