@@ -82,18 +82,18 @@ local function attachSlotInput(slot)
 	local input = hand and inputName and hand:FindFirstChild(inputName) or nil
 	if not isTouch then
 		local target = input or slot
-			conns.enter = target.MouseEnter:Connect(function()
-				print("[CardClient] MouseEnter on", target.Name, "-> slot", slot.Name)
-				local st = slotStates[slot]
-				if st and st.collapseTimer then
-					st.collapseTimer = nil
-				end
-				if not st or not st.expanded then
-					slotStates[slot] = slotStates[slot] or {}
-					slotStates[slot].expanded = true
-					tweenSlot(slot, true)
-				end
-			end)
+		conns.enter = target.MouseEnter:Connect(function()
+			print("[CardClient] MouseEnter on", target.Name, "-> slot", slot.Name)
+			local st = slotStates[slot]
+			if st and st.collapseTimer then
+				st.collapseTimer = nil
+			end
+			if not st or not st.expanded then
+				slotStates[slot] = slotStates[slot] or {}
+				slotStates[slot].expanded = true
+				tweenSlot(slot, true)
+			end
+		end)
 
 		conns.leave = target.MouseLeave:Connect(function()
 			print("[CardClient] MouseLeave on", target.Name, "-> slot", slot.Name)
@@ -105,12 +105,34 @@ local function attachSlotInput(slot)
 			end)
 		end)
 	else
-		-- Mobile: toggle on tap; use input if present
+		-- Mobile: toggle on tap; first tap expands (collapsing others), second tap uses the card
 		local target = input or slot
 		conns.activated = target.Activated:Connect(function()
-			local useBtn = slot:FindFirstChild("UseButton")
-			local visible = useBtn and useBtn.Visible
-			tweenSlot(slot, not visible)
+			slotStates[slot] = slotStates[slot] or {}
+			local st = slotStates[slot]
+			local isExpanded = st.expanded
+			if not isExpanded then
+				-- collapse other expanded slots
+				local parent = slot.Parent
+				if parent then
+					for _, other in ipairs(parent:GetChildren()) do
+						if other ~= slot and slotStates[other] and slotStates[other].expanded then
+							slotStates[other].expanded = false
+							tweenSlot(other, false)
+						end
+					end
+				end
+				st.expanded = true
+				tweenSlot(slot, true)
+			else
+				-- already expanded -> treat as use
+				local uid = slot:GetAttribute("cardUid")
+				if uid and uid ~= "" then
+					remoteEvent:FireServer("RequestUseCard", uid, {})
+				end
+				st.expanded = false
+				tweenSlot(slot, false)
+			end
 		end)
 	end
 	slotConnections[slot] = conns
@@ -137,15 +159,11 @@ local function renderHand(cards)
 			local card = cards and cards[i]
 			if card then
 				if img then img.Image = card.meta.Icon or "" end
-				-- attach activation to input hitbox if present, otherwise whole slot
-				local inputName = slot:GetAttribute("inputName")
-				local input = (slot.Parent and inputName) and slot.Parent:FindFirstChild(inputName) or nil
-				local targetForUse = input or slot
-				useConnections[slot] = targetForUse.Activated:Connect(function()
-					remoteEvent:FireServer("RequestUseCard", card.uid, {})
-				end)
+				-- store card uid on slot for activation handler
+				slot:SetAttribute("cardUid", card.uid)
 			else
 				if img then img.Image = "" end
+				slot:SetAttribute("cardUid", "")
 			end
 		end
 	end
