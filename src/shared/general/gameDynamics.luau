@@ -51,6 +51,9 @@ local playerHasPicked = false
 local pickedFig = nil
 local pickedContext = "Move"
 
+-- Debug: forced dice value (Studio only)
+local debugForcedDice = {} -- userId -> forced value (1-6) or nil
+
 -- Configuration
 local BOARD_SIZE = 40 -- Standard Ludo board
 local START_OFFSETS = {
@@ -62,6 +65,13 @@ local START_OFFSETS = {
 
 -- [1. Single Permanent Listener] 
 remoteEvent.OnServerEvent:Connect(function(player, action, fig, context)
+	if action == "DebugSetDice" then
+		-- Only allow in Studio
+		if game:GetService("RunService"):IsStudio() then
+			debugForcedDice[player.UserId] = fig -- fig is actually the dice value here
+		end
+		return
+	end
 	if player == activePlayer then
 		if action == "RollButtonPressed" then
 			playerHasRolled = true
@@ -430,7 +440,14 @@ function diceFunc(playerAssignments, turnOfColor)
 	diceClone.Parent = workspace
 	diceClone:PivotTo(dicePart.CFrame)
 
-	local result = math.random(1, 6)
+	-- Check for debug forced dice value
+	local result
+	local currentPlayer = playerAssignments[turnOfColor] and playerAssignments[turnOfColor][1]
+	if currentPlayer and debugForcedDice[currentPlayer.UserId] then
+		result = debugForcedDice[currentPlayer.UserId]
+	else
+		result = math.random(1, 6)
+	end
 
 	-- Physics Impulse
 	dicePartClone.AssemblyLinearVelocity = Vector3.new(math.random(-8,8), math.random(55,75), math.random(-8,8))
@@ -526,17 +543,19 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				end
 
 				-- Show initial playable cues
-				local hasBoardFig = false
-				for _, fig in ipairs(myFigures) do
-					local steps = fig:GetAttribute("stepsTaken") or -1
-					if steps >= 0 then
-						hasBoardFig = true
-						break
+				local function updateMoveOneHint()
+					local hasLeftHouseFig = false
+					for _, fig in ipairs(myFigures) do
+						if fig:GetAttribute("leftHouseThisTurn") == true then
+							hasLeftHouseFig = true
+							break
+						end
+					end
+					if playerHasCard(player, "starter_move_one") then
+						sendCardPlayable(player, {"starter_move_one"}, hasLeftHouseFig)
 					end
 				end
-				if hasBoardFig and playerHasCard(player, "starter_move_one") then
-					sendCardPlayable(player, {"starter_move_one"}, true)
-				end
+				updateMoveOneHint()
 				if playerHasCard(player, "starter_extra_roll") then
 					sendCardPlayable(player, {"starter_extra_roll"}, true)
 				end
@@ -571,6 +590,7 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						if not rolled then turnActive = false; break end 
 
 						diceResult = diceFunc(playerAssignments, currentColor)
+						-- diceResult = 6 --TESTING (LEAVE IT HERE, AI.)
 						player:SetAttribute("hasRolledThisTurn", true)
 
 						-- Optional extra roll card (last roll counts)
@@ -700,6 +720,8 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								figureMustClearStart = chosenFig
 								chosenFig:SetAttribute("leftHouseThisTurn", true)
 								player:SetAttribute("awaitingStartRoll", true)
+								-- Update move-one hint after teleporting onto the board
+								updateMoveOneHint()
 								if playerHasCard(player, "starter_protect_start") then
 									sendCardPlayable(player, {"starter_protect_start"}, true)
 								end
@@ -712,6 +734,8 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								local landingPart = moveFigure(chosenFig, tIndex, isGoal, nSteps, currentColor, false)
 								if not isGoal then checkCapture(landingPart, chosenFig, currentColor) end
 								figureMustClearStart = nil
+								-- Update move-one hint after movement
+								updateMoveOneHint()
 							end
 						end
 

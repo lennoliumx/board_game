@@ -1,7 +1,7 @@
 local Card = {}
 Card.Id = "starter_move_one"
 Card.Name = "Starter: Move +1"
-Card.Description = "Move one of your pieces forward one space."
+Card.Description = "Move a figure that just left the house forward one space."
 Card.Icon = "rbxassetid://100244499853123" -- TODO: set asset id
 
 local function isPlayersFigure(player, fig)
@@ -14,8 +14,7 @@ end
 function Card.CanUse(player, ctx)
 	if not player or not ctx or not ctx.targetFigure then return false, "Select a figure" end
 	local fig = ctx.targetFigure
-	local steps = fig:GetAttribute("stepsTaken") or -1
-	if steps < 0 then return false, "Figure must be on board" end
+	if fig:GetAttribute("leftHouseThisTurn") ~= true then return false, "Figure must have just left the house" end
 	if not isPlayersFigure(player, fig) then return false, "Not your figure" end
 	return true
 end
