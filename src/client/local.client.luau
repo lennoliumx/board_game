@@ -27,12 +27,6 @@ local function clearSelectors()
 			child:Destroy()
 		end
 	end
-
-	-- 2. Turn off highlights on all figures
-	for _, fig in ipairs(CollectionService:GetTagged("figure")) do
-		local hl = fig:FindFirstChild("SelectionHighlight")
-		if hl then hl.Enabled = false end
-	end
 end
 
 

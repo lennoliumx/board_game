@@ -6,8 +6,9 @@ local playersReady = repStorage:WaitForChild("PlayersReady")
 local roundActive = repStorage:WaitForChild("roundActive")
 
 -- Require Modules
-local roundSys = require(game.ReplicatedStorage.Shared.roundSys)
-local gameDynamics = require(game.ReplicatedStorage.Shared.gameDynamics)
+local roundSys = require(game.ReplicatedStorage.Shared.general.roundSys)
+local gameDynamics = require(game.ReplicatedStorage.Shared.general.gameDynamics)
+local cardManager = require(game.ReplicatedStorage.Shared.cardManager)
 
 -- Handle Player Ready
 remoteEvent.OnServerEvent:Connect(function(plr, msg, playerReadyBool, char)
@@ -30,7 +31,7 @@ task.spawn(function()
 
 		if not roundActive.Value then
 			-- Logic: Wait for players to be ready
-			if playersReady.Value > 1 then -- Changed condition slightly: 1 player allows debug testing
+			if playersReady.Value > 0 then -- Changed condition slightly: 1 player allows debug testing
 				print("Starting Round...")
 				roundActive.Value = true
 
@@ -40,6 +41,26 @@ task.spawn(function()
 
 				local assignments = roundSys.spawnChars()
 				roundSys.assignMapCollisionGroups()
+
+				-- Initialize card system and generate card tiles
+				pcall(function()
+					cardManager.Initialize(assignments)
+					cardManager.GenerateCardTiles(4)
+				end)
+
+				-- Give starting random cards to each assigned player (fill up to 3)
+				pcall(function()
+					for color, info in pairs(assignments) do
+						if type(info) == "table" and info[1] and info[1].Parent then
+							local plr = info[1]
+							-- try to fill up to 3 cards
+							for i = 1, 3 do
+								local ok = cardManager.GiveRandomCardToPlayer(plr)
+								if not ok then break end
+							end
+						end
+					end
+				end)
 
 				-- Start the Game Logic Module
 				gameDynamics.StartGameLoop(assignments)

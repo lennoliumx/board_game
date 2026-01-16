@@ -7,6 +7,7 @@ local remoteEvent = repStorage:WaitForChild("RemoteEvent")
 local turnIndex = repStorage:WaitForChild("turnIndex")
 local turnOrder = {"red", "blue", "green", "yellow"} -- Standard Ludo Order
 local currentMap = workspace:WaitForChild("CurrentMap"):FindFirstChildOfClass("Folder")
+local cardManager = require(game.ReplicatedStorage.Shared.cardManager)
 
 -- Animation Cache
 local animCache = {} 
@@ -264,6 +265,13 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 	figure:SetAttribute("tileIndex", isGoal and ("G"..targetIndex) or targetIndex)
 	figure:SetAttribute("isGoal", isGoal)
 
+	-- Notify CardManager (non-blocking)
+	pcall(function()
+		if cardManager and cardManager.HandlePlayerLandingByFigure then
+			cardManager.HandlePlayerLandingByFigure(figure, color, finalTargetPart)
+		end
+	end)
+
 	return finalTargetPart
 end
 
@@ -285,13 +293,8 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 
 		local enemyTile = enemy:GetAttribute("tileIndex")
 
-
-		print(enemyTile)
-		print(myTile)
 		-- 2. ROBUST COMPARISON: Convert both to string to prevent "15" (String) ~= 15 (Number) errors
 		if tostring(enemyTile) == tostring(myTile) then
-			
-			print("4")
 
 			print("[Capture Check] Collision found with:", enemy.Name)
 
@@ -300,31 +303,35 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 
 			-- 3. Capture Logic: Only if colors are different
 			if enemyColor and enemyColor ~= movingColor then
-				print("⚔️ CAPTURE! Sending " .. enemy.Name .. " home.")
+				-- Respect protection attribute
+				local protected = enemy:GetAttribute("protectedTurns") or 0
+				if protected > 0 then
+					print("...enemy is protected, skipping capture")
+				else
+					print("⚔️ CAPTURE! Sending " .. enemy.Name .. " home.")
 
-				-- Reset Enemy Attributes
-				enemy:SetAttribute("stepsTaken", -1) -- -1 means Home
-				enemy:SetAttribute("tileIndex", 0)   -- 0 means Home
+					-- Reset Enemy Attributes
+					enemy:SetAttribute("stepsTaken", -1) -- -1 means Home
+					enemy:SetAttribute("tileIndex", 0)   -- 0 means Home
 
-				
-				-- Find Spawn Location
-				local spawnFolder = currentMap["Spielfeld" .. enemyColor:sub(1,1):upper()..enemyColor:sub(2)].spawnFields
-				local enemyID = tonumber(enemy:GetAttribute("figureID")) or 1
-				local spawnPart = spawnFolder:GetChildren()[enemyID]
+					-- Find Spawn Location
+					local spawnFolder = currentMap["Spielfeld" .. enemyColor:sub(1,1):upper()..enemyColor:sub(2)].spawnFields
+					local enemyID = tonumber(enemy:GetAttribute("figureID")) or 1
+					local spawnPart = spawnFolder:GetChildren()[enemyID]
 
-
-				-- Physical Teleport
-				if spawnPart then
-					-- Reset velocity so they don't fly away
-					if enemy.PrimaryPart then
-						enemy.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
-						enemy.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+					-- Physical Teleport
+					if spawnPart then
+						-- Reset velocity so they don't fly away
+						if enemy.PrimaryPart then
+							enemy.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
+							enemy.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
+						end
+						enemy:PivotTo(CFrame.new(spawnPart.CFrame.x,5,spawnPart.Position.z))
 					end
-					enemy:PivotTo(CFrame.new(spawnPart.CFrame.x,5,spawnPart.Position.z))
-				end
 
-				-- Optional: Break loop if only 1 capture allowed per tile
-				break 
+					-- Optional: Break loop if only 1 capture allowed per tile
+					break
+				end
 			else
 				print("...but it's a friendly figure. Stacking.")
 			end
@@ -553,6 +560,23 @@ function gameDynamics.StartGameLoop(playerAssignments)
 					end
 				end
 			end
+
+			-- Decrement protection counters for figures for whom this was an opponent's turn
+			pcall(function()
+				local figuresFolder = workspace:FindFirstChild("Figures")
+				if figuresFolder then
+					for _, colorFolder in pairs(figuresFolder:GetChildren()) do
+						local folderName = colorFolder.Name
+						if folderName ~= currentColor then
+							for _, fig in ipairs(colorFolder:GetChildren()) do
+								local prot = fig:GetAttribute("protectedTurns") or 0
+								if prot > 0 then fig:SetAttribute("protectedTurns", prot - 1) end
+							end
+						end
+					end
+				end
+			end)
+
 			if turnIndex.Value >= 4 then turnIndex.Value = 1 else turnIndex.Value += 1 end
 			task.wait(0.5)
 		end

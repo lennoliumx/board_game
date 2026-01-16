@@ -10,16 +10,12 @@
     },
 
     "ServerScriptService": {
-      "Server": {
-        "$path": "src/server"
-      }
+      "$path": "src/server"
     },
 
     "StarterPlayer": {
       "StarterPlayerScripts": {
-        "Client": {
           "$path": "src/client"
-        }
       }
     },
 
@@ -39,7 +35,7 @@
           "Locked": true,
           "Position": [
             0,
-            -10,
+            -46,
             0
           ],
           "Size": [

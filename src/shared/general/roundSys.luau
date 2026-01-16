@@ -65,7 +65,7 @@ function roundSys.spawnChars()
 				outline.OutlineColor = colorTable[color]
 				outline.Adornee = clone
 				outline.Parent = clone
-				outline.Enabled = true -- Hidden by default
+				outline.Enabled = true 
 				outline.Name = "SelectionHighlight"
 
 				clone:AddTag("figure")
