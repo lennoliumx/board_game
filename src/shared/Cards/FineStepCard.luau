@@ -1,7 +1,7 @@
 local Card = {}
 Card.Id = "starter_start_plus_one"
-Card.Name = "Starter: Start +1"
-Card.Description = "If a piece left the house this turn, add +1 to the roll that moves it off the start tile."
+Card.Name = "Starter: Fine Step"
+Card.Description = "Move one of your pieces forward one space."
 Card.Icon = "rbxassetid://129877086687729" -- TODO: set asset id
 
 local function isPlayersFigure(player, fig)
@@ -13,17 +13,17 @@ end
 
 function Card.CanUse(player, ctx)
 	if not player or not ctx or not ctx.targetFigure then return false, "Select a figure" end
-	if player:GetAttribute("awaitingStartRoll") ~= true then return false, "Not available now" end
 	local fig = ctx.targetFigure
-	if fig:GetAttribute("leftHouseThisTurn") ~= true then return false, "Not eligible" end
+	local steps = fig:GetAttribute("stepsTaken") or -1
+	if steps < 0 then return false, "Figure must be on board" end
 	if not isPlayersFigure(player, fig) then return false, "Not your figure" end
 	return true
 end
 
-function Card.OnUse(player, _)
-	if not player then return false end
-	player:SetAttribute("startPlusOnePending", true)
-	return true
+function Card.OnUse(player, ctx)
+	local fig = ctx and ctx.targetFigure
+	if not fig then return false end
+	return { effect = "moveOne", targetFigure = fig, steps = 1 }
 end
 
 return Card

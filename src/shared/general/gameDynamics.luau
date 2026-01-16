@@ -533,7 +533,6 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				player:SetAttribute("awaitingStartRoll", false)
 				player:SetAttribute("extraRollRequested", false)
 				player:SetAttribute("extraRollWindowOpen", false)
-				player:SetAttribute("startPlusOnePending", false)
 				player:SetAttribute("captureBonusAvailable", false)
 				player:SetAttribute("captureBonusFigureName", "")
 
@@ -555,7 +554,21 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						sendCardPlayable(player, {"starter_move_one"}, hasLeftHouseFig)
 					end
 				end
+				local function updateFineStepHint()
+					local hasBoardFig = false
+					for _, fig in ipairs(myFigures) do
+						local steps = fig:GetAttribute("stepsTaken") or -1
+						if steps >= 0 then
+							hasBoardFig = true
+							break
+						end
+					end
+					if playerHasCard(player, "starter_start_plus_one") then
+						sendCardPlayable(player, {"starter_start_plus_one"}, hasBoardFig)
+					end
+				end
 				updateMoveOneHint()
+				updateFineStepHint()
 				if playerHasCard(player, "starter_extra_roll") then
 					sendCardPlayable(player, {"starter_extra_roll"}, true)
 				end
@@ -569,14 +582,10 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						if playerHasCard(player, "starter_protect_start") then
 							sendCardPlayable(player, {"starter_protect_start"}, true)
 						end
-						if playerHasCard(player, "starter_start_plus_one") then
-							sendCardPlayable(player, {"starter_start_plus_one"}, true)
-						end
 					else
 						if player:GetAttribute("awaitingStartRoll") == true then
 							player:SetAttribute("awaitingStartRoll", false)
 							sendCardPlayable(player, {"starter_protect_start"}, false)
-							sendCardPlayable(player, {"starter_start_plus_one"}, false)
 						end
 					end
 
@@ -612,19 +621,10 @@ function gameDynamics.StartGameLoop(playerAssignments)
 							sendCardPlayable(player, {"starter_extra_roll"}, false)
 						end
 
-						-- Apply start-plus-one if pending and clearing start now
-						if figureMustClearStart and player:GetAttribute("startPlusOnePending") == true then
-							player:SetAttribute("startPlusOnePending", false)
-							diceResult += 1
-							-- start-related cues consumed
-							sendCardPlayable(player, {"starter_start_plus_one"}, false)
-							player:SetAttribute("awaitingStartRoll", false)
-						end
-
 						-- Clear start-related cues after the roll window
 						if figureMustClearStart and player:GetAttribute("awaitingStartRoll") == true then
 							player:SetAttribute("awaitingStartRoll", false)
-							sendCardPlayable(player, {"starter_protect_start", "starter_start_plus_one"}, false)
+							sendCardPlayable(player, {"starter_protect_start"}, false)
 						end
 
 						if attempts == 3 then
@@ -720,13 +720,11 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								figureMustClearStart = chosenFig
 								chosenFig:SetAttribute("leftHouseThisTurn", true)
 								player:SetAttribute("awaitingStartRoll", true)
-								-- Update move-one hint after teleporting onto the board
+								-- Update hints after teleporting onto the board
 								updateMoveOneHint()
+								updateFineStepHint()
 								if playerHasCard(player, "starter_protect_start") then
 									sendCardPlayable(player, {"starter_protect_start"}, true)
-								end
-								if playerHasCard(player, "starter_start_plus_one") then
-									sendCardPlayable(player, {"starter_start_plus_one"}, true)
 								end
 							else
 								-- WALK (Normal)
@@ -734,8 +732,9 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								local landingPart = moveFigure(chosenFig, tIndex, isGoal, nSteps, currentColor, false)
 								if not isGoal then checkCapture(landingPart, chosenFig, currentColor) end
 								figureMustClearStart = nil
-								-- Update move-one hint after movement
+								-- Update hints after movement
 								updateMoveOneHint()
+								updateFineStepHint()
 							end
 						end
 

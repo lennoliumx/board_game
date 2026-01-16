@@ -242,9 +242,18 @@ end
 local function getValidFiguresForCard(player, cardId)
     local figures = getPlayerFigures(player)
     local valid = {}
-    if cardId == "starter_move_one" or cardId == "starter_protect_start" or cardId == "starter_start_plus_one" then
+    if cardId == "starter_move_one" or cardId == "starter_protect_start" then
+        -- These cards only work for figures that just left house
         for _, fig in ipairs(figures) do
             if fig:GetAttribute("leftHouseThisTurn") == true then
+                table.insert(valid, fig)
+            end
+        end
+    elseif cardId == "starter_start_plus_one" then
+        -- Fine step works for any figure on the board
+        for _, fig in ipairs(figures) do
+            local steps = fig:GetAttribute("stepsTaken") or -1
+            if steps >= 0 then
                 table.insert(valid, fig)
             end
         end
