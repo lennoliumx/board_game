@@ -40,9 +40,7 @@ local function tweenSlot(slot, toExpanded)
 		end)
 	end
 
-	-- toggle UseButton visibility when expanded
-	local useBtn = slot:FindFirstChild("UseButton")
-	if useBtn then useBtn.Visible = toExpanded end
+	-- no separate Use button; whole card/input is clickable
 
 	-- also tween input hitbox if present (keep it aligned)
 	local hand = slot.Parent
@@ -61,6 +59,7 @@ local isTouch = UserInputService.TouchEnabled
 local slotConnections = {}
 local slotStates = {} -- slot -> {expanded = bool, collapseTimer = RBXScriptConnection or nil}
 local COLLAPSE_DELAY = 0.12
+local useConnections = {} -- map slot -> connection for UseButton
 
 local function clearSlotConnections(slot)
 	if not slot then return end
@@ -118,29 +117,35 @@ local function attachSlotInput(slot)
 end
 
 local function renderHand(cards)
+	print("reached")
 	if not cardGui then return end
-	local handFrame = cardGui:FindFirstChild("HandFrame")
+	local handFrame = cardGui:WaitForChild("HandFrame")
 	for i = 1, 3 do
 		local slot = handFrame and handFrame:FindFirstChild("Slot"..i)
+		print(slot)
+		print(i)
 		if slot then
 			attachSlotInput(slot)
 			local img = slot:FindFirstChild("CardImage")
 			local useBtn = slot:FindFirstChild("UseButton")
-			-- disconnect previous use connection
-			if slot._useConn then slot._useConn:Disconnect(); slot._useConn = nil end
+			-- disconnect previous use connection (do not attach properties to Roblox Instances)
+			if useConnections[slot] then
+				useConnections[slot]:Disconnect()
+				useConnections[slot] = nil
+			end
 
 			local card = cards and cards[i]
 			if card then
 				if img then img.Image = card.meta.Icon or "" end
-				if useBtn then
-					useBtn.Visible = false
-					slot._useConn = useBtn.Activated:Connect(function()
-						remoteEvent:FireServer("RequestUseCard", card.uid, {})
-					end)
-				end
+				-- attach activation to input hitbox if present, otherwise whole slot
+				local inputName = slot:GetAttribute("inputName")
+				local input = (slot.Parent and inputName) and slot.Parent:FindFirstChild(inputName) or nil
+				local targetForUse = input or slot
+				useConnections[slot] = targetForUse.Activated:Connect(function()
+					remoteEvent:FireServer("RequestUseCard", card.uid, {})
+				end)
 			else
 				if img then img.Image = "" end
-				if useBtn then useBtn.Visible = false end
 			end
 		end
 	end
@@ -156,7 +161,7 @@ local eventHandlers = {
 	end,
 	["CardGranted"] = function(p)
 		-- show popup
-		print("Card granted:", p.Card and p.Card.id)
+		--print("Card granted:", p.Card and p.Card.id)
 	end,
 	["CardUseResult"] = function(p)
 		if p.Success then print("Card used successfully") else print("Card use failed") end

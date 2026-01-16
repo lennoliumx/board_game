@@ -63,11 +63,11 @@ local function createGui()
         slot:SetAttribute("hiddenPosX", offset)
         slot:SetAttribute("hiddenY", 40)
         -- Small lift to avoid mouse leaving the slot while expanding
-        slot:SetAttribute("expandedY", -60)
-        slot:SetAttribute("hiddenSizeX", 120)
-        slot:SetAttribute("hiddenSizeY", 160)
-        slot:SetAttribute("expandedSizeX", 140)
-        slot:SetAttribute("expandedSizeY", 200)
+        slot:SetAttribute("expandedY", -120)
+        slot:SetAttribute("hiddenSizeX", 160)
+        slot:SetAttribute("hiddenSizeY", 220)
+        slot:SetAttribute("expandedSizeX", 240)
+        slot:SetAttribute("expandedSizeY", 340)
         
         -- Create a separate invisible input hitbox so overlapping visuals don't block input
         local input = Instance.new("TextButton")
