@@ -31,8 +31,8 @@ task.spawn(function()
 
 		if not roundActive.Value then
 			-- Logic: Wait for players to be ready
-			if playersReady.Value > 0 then -- Changed condition slightly: 1 player allows debug testing
-				print("Starting Round...")
+			if playersReady.Value > 1 then -- Changed condition slightly: 1 player allows debug testing
+				-- Starting Round
 				roundActive.Value = true
 
 				remoteEvent:FireAllClients({Msg = "updateRoundGuiStartingRound"})

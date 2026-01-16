@@ -31,7 +31,8 @@ local function createGui()
 
         local offset = (i - 2) * 120 -- spread
         slot.Position = UDim2.new(0.5, offset, 1, 40) -- hidden slightly below bottom
-        slot.Size = UDim2.new(0, 120, 0, 160) -- hidden size
+        -- match the "hidden" attributes so slot and hitbox start aligned
+        slot.Size = UDim2.new(0, 160, 0, 220)
         slot.Parent = hand
         slot.ZIndex = 1
 
@@ -74,7 +75,7 @@ local function createGui()
         input.Name = "Input"..i
         input.AnchorPoint = Vector2.new(0.5, 1)
         input.Position = UDim2.new(0.5, offset, 1, 40)
-        input.Size = UDim2.new(0, 100, 0, 160)
+        input.Size = UDim2.new(0, 160, 0, 220)
         input.BackgroundTransparency = 1
         input.AutoButtonColor = false
         input.ZIndex = 20

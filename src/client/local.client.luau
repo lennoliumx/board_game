@@ -20,6 +20,8 @@ local figureGuis = GUIs:WaitForChild("FigureGui") -- Ensure this ScreenGui exist
 local remoteEvent = game.ReplicatedStorage:WaitForChild("RemoteEvent")
 local PlayerReadyBool = LocalPlayer:WaitForChild("Backpack"):WaitForChild("Ready")
 
+local selectionContext = "Move"
+
 local function clearSelectors()
 	-- 1. Remove the active billboard clones
 	for _, child in pairs(figureGuis:GetChildren()) do
@@ -52,6 +54,7 @@ local eventHandlers = {
 	end,
 	["GuiChange:ShowFigureButtons"] = function(p) 
 		clearSelectors() -- Safety wipe before showing new ones
+		selectionContext = p.Context or "Move"
 
 		local validFigures = p.validFigures or {}
 		local template = figureGuis:WaitForChild("SelectionBillboard") -- We will create this below
@@ -75,13 +78,13 @@ local eventHandlers = {
 			if actionBtn then
 				actionBtn.Activated:Connect(function()
 					-- Fire the specific figure instance to server
-					remoteEvent:FireServer("FigureChosen", fig)
+					remoteEvent:FireServer("FigureChosen", fig, selectionContext)
 
 					-- Instant feedback: Hide all buttons immediately
 					clearSelectors()
 				end)
 			else
-				warn("SelectionBillboard is missing a TextButton named 'SelectButton'")
+				-- Selection template missing button
 			end
 		end
 
@@ -91,6 +94,7 @@ local eventHandlers = {
 
 	["GuiChange:HideFigureButtons"] = function(p) 
 		clearSelectors()
+		selectionContext = "Move"
 		timerGUI.Visible = false
 	end,
 	["GuiChange:BonusTurn"] = function(p)

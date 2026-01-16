@@ -19,6 +19,7 @@ local activePlayer = nil
 local playerHasRolled = false 
 local playerHasPicked = false
 local pickedFig = nil
+local pickedContext = "Move"
 
 -- Configuration
 local BOARD_SIZE = 40 -- Standard Ludo board
@@ -30,12 +31,13 @@ local START_OFFSETS = {
 }
 
 -- [1. Single Permanent Listener] 
-remoteEvent.OnServerEvent:Connect(function(player, action, fig)
+remoteEvent.OnServerEvent:Connect(function(player, action, fig, context)
 	if player == activePlayer then
 		if action == "RollButtonPressed" then
 			playerHasRolled = true
 		elseif action == "FigureChosen" and fig then
 			pickedFig = fig
+			pickedContext = context or "Move"
 			playerHasPicked = true
 		end
 	end
@@ -80,13 +82,12 @@ function waitForPlayerInput(player, action, validFigures)
 		for i = timeOut, 0, -step do
 			if not player.Parent then break end
 
-			if playerHasPicked and pickedFig then
+			if playerHasPicked and pickedFig and (pickedContext == "Move") then
 				-- Server-side validation: Is the picked figure actually in the valid list?
 				if table.find(validFigures, pickedFig) then
 					selected = pickedFig
 					break
 				else
-					print("Player tried to pick invalid figure")
 					playerHasPicked = false -- Reset and wait
 				end
 			end
@@ -179,7 +180,6 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 
 		-- Safety Check: Ensure we have something to walk with
 		if not figure.PrimaryPart then
-			warn("CRITICAL: Figure " .. figure.Name .. " is missing PrimaryPart! Cannot walk.")
 			return -- Abort to prevent crash
 		end
 
@@ -191,7 +191,6 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 		for i = 1, stepsToWalk do
 			-- CRITICAL SAFETY CHECK INSIDE LOOP
 			if not figure or not figure.Parent or not figure.PrimaryPart then
-				warn("Figure destroyed or fell into void during movement.")
 				break
 			end
 
@@ -275,12 +274,21 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 	return finalTargetPart
 end
 
+local function sendCardPlayable(player, cardIds, active)
+	if not player or not cardIds then return end
+	remoteEvent:FireClient(player, { Msg = "CardPlayableUpdate", CardIds = cardIds, Active = active })
+end
+
+local function playerHasCard(player, cardId)
+	if not cardManager or not cardManager.HasCardId then return false end
+	return cardManager.HasCardId(player, cardId)
+end
+
 function checkCapture(targetTilePart, movingFigure, movingColor)
 	local allFigures = CollectionService:GetTagged("figure")
 	local myTile = movingFigure:GetAttribute("tileIndex")
 
-	-- Debug: Verify the function is actually running
-	print("[Capture Check] Attacker:", movingFigure.Name, "| Tile:", myTile)
+	-- capture check running
 
 	-- 1. Safety: Cannot capture if we are safely inside the Goal (House)
 	if movingFigure:GetAttribute("isGoal") == true then return end 
@@ -296,7 +304,7 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 		-- 2. ROBUST COMPARISON: Convert both to string to prevent "15" (String) ~= 15 (Number) errors
 		if tostring(enemyTile) == tostring(myTile) then
 
-			print("[Capture Check] Collision found with:", enemy.Name)
+            
 
 			-- Extract enemy color from name "Figure_red_1"
 			local enemyColor = enemy.Name:match("Figure_(%a+)_")
@@ -306,9 +314,9 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 				-- Respect protection attribute
 				local protected = enemy:GetAttribute("protectedTurns") or 0
 				if protected > 0 then
-					print("...enemy is protected, skipping capture")
+					-- enemy protected, skip capture
 				else
-					print("⚔️ CAPTURE! Sending " .. enemy.Name .. " home.")
+					-- capture: send enemy home
 
 					-- Reset Enemy Attributes
 					enemy:SetAttribute("stepsTaken", -1) -- -1 means Home
@@ -329,15 +337,48 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 						enemy:PivotTo(CFrame.new(spawnPart.CFrame.x,5,spawnPart.Position.z))
 					end
 
+					-- Capture bonus card cue for capturer
+					local capturer = cardManager.GetPlayerByColor(movingColor)
+					if capturer and capturer.Parent then
+						capturer:SetAttribute("captureBonusAvailable", true)
+						capturer:SetAttribute("captureBonusFigureName", movingFigure.Name)
+						if playerHasCard(capturer, "starter_capture_bonus") then
+							sendCardPlayable(capturer, {"starter_capture_bonus"}, true)
+						end
+					end
+
 					-- Optional: Break loop if only 1 capture allowed per tile
 					break
 				end
 			else
-				print("...but it's a friendly figure. Stacking.")
+				-- friendly figure, stacking
 			end
 		end
 	end
 end
+
+local function applyCardEffect(player, effect)
+	if not effect or not effect.effect then return end
+	if effect.effect == "moveOne" then
+		local fig = effect.targetFigure
+		if not fig then return end
+		local color = fig.Name:match("Figure_(%a+)_")
+		if not color then return end
+		local steps = effect.steps or 1
+		local currentSteps = fig:GetAttribute("stepsTaken") or -1
+		if currentSteps < 0 then return end
+		local tIndex, isGoal, newSteps = calculateTargetTile(color, currentSteps, steps)
+		if not newSteps then return end
+		local landingPart = moveFigure(fig, tIndex, isGoal, newSteps, color, false)
+		if not isGoal then checkCapture(landingPart, fig, color) end
+	end
+end
+
+pcall(function()
+	if cardManager and cardManager.SetMoveApi then
+		cardManager.SetMoveApi({ ApplyEffect = applyCardEffect })
+	end
+end)
 
 -- [5. Dice Logic]
 function diceFunc(playerAssignments, turnOfColor)
@@ -432,9 +473,56 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				local myFigures = activePlayerTuple[3]
 				local turnActive = true
 
+				-- Per-turn card state
+				player:SetAttribute("hasRolledThisTurn", false)
+				player:SetAttribute("awaitingStartRoll", false)
+				player:SetAttribute("extraRollRequested", false)
+				player:SetAttribute("extraRollWindowOpen", false)
+				player:SetAttribute("startPlusOnePending", false)
+				player:SetAttribute("captureBonusAvailable", false)
+				player:SetAttribute("captureBonusFigureName", "")
+
+				-- Clear left-house markers
+				for _, fig in ipairs(myFigures) do
+					fig:SetAttribute("leftHouseThisTurn", false)
+				end
+
+				-- Show initial playable cues
+				local hasBoardFig = false
+				for _, fig in ipairs(myFigures) do
+					local steps = fig:GetAttribute("stepsTaken") or -1
+					if steps >= 0 then
+						hasBoardFig = true
+						break
+					end
+				end
+				if hasBoardFig and playerHasCard(player, "starter_move_one") then
+					sendCardPlayable(player, {"starter_move_one"}, true)
+				end
+				if playerHasCard(player, "starter_extra_roll") then
+					sendCardPlayable(player, {"starter_extra_roll"}, true)
+				end
+
 				local figureMustClearStart = nil
 
 				while turnActive do
+					-- If a piece just left house, allow start-related cards before the next roll
+					if figureMustClearStart then
+						player:SetAttribute("awaitingStartRoll", true)
+						if playerHasCard(player, "starter_protect_start") then
+							sendCardPlayable(player, {"starter_protect_start"}, true)
+						end
+						if playerHasCard(player, "starter_start_plus_one") then
+							sendCardPlayable(player, {"starter_start_plus_one"}, true)
+						end
+					else
+						if player:GetAttribute("awaitingStartRoll") == true then
+							player:SetAttribute("awaitingStartRoll", false)
+							sendCardPlayable(player, {"starter_protect_start"}, false)
+							sendCardPlayable(player, {"starter_start_plus_one"}, false)
+						end
+					end
+
 					-- A. Attempts Logic
 					local attempts = (countFiguresInHouse(myFigures) == 4) and 3 or 1
 					local diceResult = 0
@@ -445,6 +533,41 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						if not rolled then turnActive = false; break end 
 
 						diceResult = diceFunc(playerAssignments, currentColor)
+						player:SetAttribute("hasRolledThisTurn", true)
+
+						-- Optional extra roll card (last roll counts)
+						if playerHasCard(player, "starter_extra_roll") then
+							player:SetAttribute("extraRollWindowOpen", true)
+							local waitTime = 0
+							local window = 4
+							while waitTime < window do
+								if player:GetAttribute("extraRollRequested") == true then
+									player:SetAttribute("extraRollRequested", false)
+									diceResult = diceFunc(playerAssignments, currentColor)
+									break
+								end
+								task.wait(0.1)
+								waitTime += 0.1
+							end
+							player:SetAttribute("extraRollWindowOpen", false)
+							-- hide extra roll cue after first roll window
+							sendCardPlayable(player, {"starter_extra_roll"}, false)
+						end
+
+						-- Apply start-plus-one if pending and clearing start now
+						if figureMustClearStart and player:GetAttribute("startPlusOnePending") == true then
+							player:SetAttribute("startPlusOnePending", false)
+							diceResult += 1
+							-- start-related cues consumed
+							sendCardPlayable(player, {"starter_start_plus_one"}, false)
+							player:SetAttribute("awaitingStartRoll", false)
+						end
+
+						-- Clear start-related cues after the roll window
+						if figureMustClearStart and player:GetAttribute("awaitingStartRoll") == true then
+							player:SetAttribute("awaitingStartRoll", false)
+							sendCardPlayable(player, {"starter_protect_start", "starter_start_plus_one"}, false)
+						end
 
 						if attempts == 3 then
 							if diceResult == 6 then hasValidRoll = true; break 
@@ -537,6 +660,14 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								local landingPart = moveFigure(chosenFig, startTileIndex, false, 0, currentColor, true)
 								if landingPart then checkCapture(landingPart, chosenFig, currentColor) end
 								figureMustClearStart = chosenFig
+								chosenFig:SetAttribute("leftHouseThisTurn", true)
+								player:SetAttribute("awaitingStartRoll", true)
+								if playerHasCard(player, "starter_protect_start") then
+									sendCardPlayable(player, {"starter_protect_start"}, true)
+								end
+								if playerHasCard(player, "starter_start_plus_one") then
+									sendCardPlayable(player, {"starter_start_plus_one"}, true)
+								end
 							else
 								-- WALK (Normal)
 								local tIndex, isGoal, nSteps = calculateTargetTile(currentColor, currentSteps, diceResult)
@@ -559,6 +690,17 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						else remoteEvent:FireClient(player, {Msg = "GuiChange:BonusTurn"}) end
 					end
 				end
+
+				-- Clear per-turn card cues and capture bonus at end of player's turn
+				player:SetAttribute("captureBonusAvailable", false)
+				player:SetAttribute("captureBonusFigureName", "")
+				sendCardPlayable(player, {
+					"starter_move_one",
+					"starter_extra_roll",
+					"starter_protect_start",
+					"starter_start_plus_one",
+					"starter_capture_bonus"
+				}, false)
 			end
 
 			-- Decrement protection counters for figures for whom this was an opponent's turn
