@@ -564,8 +564,18 @@ function gameDynamics.StartGameLoop(playerAssignments)
 					fig:SetAttribute("leftHouseThisTurn", false)
 				end
 
+				-- Clear all card hints at turn start to avoid stale state
+				sendCardPlayable(player, {
+					"starter_move_one",
+					"starter_extra_roll",
+					"starter_protect_start",
+					"starter_start_plus_one",
+					"starter_capture_bonus"
+				}, false)
+
 				-- Show initial playable cues
 				local function updateMoveOneHint()
+					-- Only hint if a figure actually left the house this turn
 					local hasLeftHouseFig = false
 					for _, fig in ipairs(myFigures) do
 						if fig:GetAttribute("leftHouseThisTurn") == true then
@@ -573,9 +583,7 @@ function gameDynamics.StartGameLoop(playerAssignments)
 							break
 						end
 					end
-					if playerHasCard(player, "starter_move_one") then
-						sendCardPlayable(player, {"starter_move_one"}, hasLeftHouseFig)
-					end
+					sendCardPlayable(player, {"starter_move_one"}, hasLeftHouseFig)
 				end
 				local function updateFineStepHint()
 					local hasBoardFig = false
@@ -586,9 +594,7 @@ function gameDynamics.StartGameLoop(playerAssignments)
 							break
 						end
 					end
-					if playerHasCard(player, "starter_start_plus_one") then
-						sendCardPlayable(player, {"starter_start_plus_one"}, hasBoardFig)
-					end
+					sendCardPlayable(player, {"starter_start_plus_one"}, hasBoardFig)
 				end
 				updateMoveOneHint()
 				updateFineStepHint()
