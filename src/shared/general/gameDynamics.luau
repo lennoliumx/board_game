@@ -319,6 +319,21 @@ local function sendCardPlayable(player, cardIds, active)
 	remoteEvent:FireClient(player, { Msg = "CardPlayableUpdate", CardIds = cardIds, Active = active })
 end
 
+local function waitForCaptureBonusWindow(player, window)
+	if not player then return end
+	if not playerHasCard(player, "starter_capture_bonus") then return end
+	if player:GetAttribute("captureBonusAvailable") ~= true then return end
+	local waitTime = 0
+	local duration = window or 3
+	while waitTime < duration do
+		if player:GetAttribute("captureBonusAvailable") ~= true then
+			break
+		end
+		task.wait(0.1)
+		waitTime += 0.1
+	end
+end
+
 local function playerHasCard(player, cardId)
 	if not cardManager or not cardManager.HasCardId then return false end
 	return cardManager.HasCardId(player, cardId)
@@ -388,13 +403,14 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 					end
 
 					-- Optional: Break loop if only 1 capture allowed per tile
-					break
+					return capturer
 				end
 			else
 				-- friendly figure, stacking
 			end
 		end
 	end
+	return nil
 end
 
 local function applyCardEffect(player, effect)
@@ -410,7 +426,12 @@ local function applyCardEffect(player, effect)
 		local tIndex, isGoal, newSteps = calculateTargetTile(color, currentSteps, steps)
 		if not newSteps then return end
 		local landingPart = moveFigure(fig, tIndex, isGoal, newSteps, color, false)
-		if not isGoal then checkCapture(landingPart, fig, color) end
+		if not isGoal then
+			local capturer = checkCapture(landingPart, fig, color)
+			if capturer then
+				waitForCaptureBonusWindow(capturer, 3)
+			end
+		end
 	end
 end
 
@@ -533,6 +554,8 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				player:SetAttribute("awaitingStartRoll", false)
 				player:SetAttribute("extraRollRequested", false)
 				player:SetAttribute("extraRollWindowOpen", false)
+				player:SetAttribute("blockExtraRollOnce", false)
+				player:SetAttribute("startPlusOnePending", false)
 				player:SetAttribute("captureBonusAvailable", false)
 				player:SetAttribute("captureBonusFigureName", "")
 
@@ -569,9 +592,6 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				end
 				updateMoveOneHint()
 				updateFineStepHint()
-				if playerHasCard(player, "starter_extra_roll") then
-					sendCardPlayable(player, {"starter_extra_roll"}, true)
-				end
 
 				local figureMustClearStart = nil
 
@@ -603,8 +623,12 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						player:SetAttribute("hasRolledThisTurn", true)
 
 						-- Optional extra roll card (last roll counts)
-						if playerHasCard(player, "starter_extra_roll") then
+						local blockExtra = player:GetAttribute("blockExtraRollOnce") == true
+						if blockExtra then
+							player:SetAttribute("blockExtraRollOnce", false)
+						elseif attempts == 1 and playerHasCard(player, "starter_extra_roll") then
 							player:SetAttribute("extraRollWindowOpen", true)
+							sendCardPlayable(player, {"starter_extra_roll"}, true)
 							local waitTime = 0
 							local window = 4
 							while waitTime < window do
@@ -716,10 +740,17 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								-- TELEPORT (House -> Start)
 								chosenFig:SetAttribute("stepsTaken", 0) 
 								local landingPart = moveFigure(chosenFig, startTileIndex, false, 0, currentColor, true)
-								if landingPart then checkCapture(landingPart, chosenFig, currentColor) end
+								if landingPart then
+									local capturer = checkCapture(landingPart, chosenFig, currentColor)
+									if capturer then
+										waitForCaptureBonusWindow(capturer, 3)
+									end
+								end
 								figureMustClearStart = chosenFig
 								chosenFig:SetAttribute("leftHouseThisTurn", true)
 								player:SetAttribute("awaitingStartRoll", true)
+								-- Block extra roll on the immediate bonus roll after leaving house
+								player:SetAttribute("blockExtraRollOnce", true)
 								-- Update hints after teleporting onto the board
 								updateMoveOneHint()
 								updateFineStepHint()
@@ -730,7 +761,12 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								-- WALK (Normal)
 								local tIndex, isGoal, nSteps = calculateTargetTile(currentColor, currentSteps, diceResult)
 								local landingPart = moveFigure(chosenFig, tIndex, isGoal, nSteps, currentColor, false)
-								if not isGoal then checkCapture(landingPart, chosenFig, currentColor) end
+								if not isGoal then
+									local capturer = checkCapture(landingPart, chosenFig, currentColor)
+									if capturer then
+										waitForCaptureBonusWindow(capturer, 3)
+									end
+								end
 								figureMustClearStart = nil
 								-- Update hints after movement
 								updateMoveOneHint()
