@@ -357,6 +357,18 @@ function cardManager.UseCard(player, cardUid, ctx)
     if currentTurnIdx then lastUsedTurn[userId] = currentTurnIdx end
     remoteEvent:FireClient(player, { Msg = "CardUseResult", Success = true, CardUid = cardUid })
     remoteEvent:FireClient(player, { Msg = "CardHandUpdate", Cards = hand })
+    
+    -- Broadcast card played to all players
+    local playerColor = playerToColor[userId] or "Unknown"
+    remoteEvent:FireAllClients({
+        Msg = "CardPlayedBroadcast",
+        PlayerName = player.Name,
+        PlayerColor = playerColor,
+        CardName = module.Name or entry.id,
+        CardIcon = module.Icon or "",
+        CardDescription = module.Description or ""
+    })
+    
     return true
 end
 

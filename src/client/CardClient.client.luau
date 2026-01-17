@@ -375,6 +375,119 @@ local function renderHand(cards)
 	updatePlayableHints()
 end
 
+-- Color lookup for player colors
+local COLOR_MAP = {
+	red = Color3.fromRGB(220, 60, 60),
+	blue = Color3.fromRGB(60, 120, 220),
+	green = Color3.fromRGB(60, 180, 60),
+	yellow = Color3.fromRGB(220, 200, 60),
+}
+
+-- Show card played notification to all players
+local function showCardPlayedNotification(playerName, playerColor, cardName, cardIcon, cardDescription)
+	-- Create notification container
+	local notification = Instance.new("Frame")
+	notification.Name = "CardPlayedNotification"
+	notification.Size = UDim2.new(0, 320, 0, 120)
+	notification.Position = UDim2.new(0.5, -160, 0, -130) -- Start above screen
+	notification.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+	notification.BackgroundTransparency = 0.1
+	notification.BorderSizePixel = 0
+	notification.ZIndex = 100
+	notification.Parent = PlayerGui:FindFirstChild("CardGui") or PlayerGui
+	
+	local corner = Instance.new("UICorner", notification)
+	corner.CornerRadius = UDim.new(0, 12)
+	
+	-- Color accent bar on left
+	local colorBar = Instance.new("Frame", notification)
+	colorBar.Name = "ColorBar"
+	colorBar.Size = UDim2.new(0, 6, 1, -16)
+	colorBar.Position = UDim2.new(0, 8, 0, 8)
+	colorBar.BackgroundColor3 = COLOR_MAP[playerColor] or Color3.fromRGB(150, 150, 150)
+	colorBar.BorderSizePixel = 0
+	local colorBarCorner = Instance.new("UICorner", colorBar)
+	colorBarCorner.CornerRadius = UDim.new(0, 3)
+	
+	-- Card icon
+	local iconFrame = Instance.new("ImageLabel", notification)
+	iconFrame.Name = "CardIcon"
+	iconFrame.Size = UDim2.new(0, 70, 0, 90)
+	iconFrame.Position = UDim2.new(0, 22, 0.5, -45)
+	iconFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
+	iconFrame.BackgroundTransparency = 0.5
+	iconFrame.BorderSizePixel = 0
+	iconFrame.Image = cardIcon or ""
+	iconFrame.ScaleType = Enum.ScaleType.Fit
+	iconFrame.ZIndex = 101
+	local iconCorner = Instance.new("UICorner", iconFrame)
+	iconCorner.CornerRadius = UDim.new(0, 6)
+	
+	-- Header text
+	local headerLabel = Instance.new("TextLabel", notification)
+	headerLabel.Name = "Header"
+	headerLabel.Size = UDim2.new(0, 210, 0, 24)
+	headerLabel.Position = UDim2.new(0, 100, 0, 12)
+	headerLabel.BackgroundTransparency = 1
+	headerLabel.Text = playerName .. " played:"
+	headerLabel.TextColor3 = COLOR_MAP[playerColor] or Color3.new(1, 1, 1)
+	headerLabel.TextSize = 16
+	headerLabel.Font = Enum.Font.GothamBold
+	headerLabel.TextXAlignment = Enum.TextXAlignment.Left
+	headerLabel.ZIndex = 101
+	
+	-- Card name
+	local nameLabel = Instance.new("TextLabel", notification)
+	nameLabel.Name = "CardName"
+	nameLabel.Size = UDim2.new(0, 210, 0, 28)
+	nameLabel.Position = UDim2.new(0, 100, 0, 36)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = cardName or "Unknown Card"
+	nameLabel.TextColor3 = Color3.new(1, 1, 1)
+	nameLabel.TextSize = 20
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+	nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	nameLabel.ZIndex = 101
+	
+	-- Card description
+	local descLabel = Instance.new("TextLabel", notification)
+	descLabel.Name = "Description"
+	descLabel.Size = UDim2.new(0, 210, 0, 40)
+	descLabel.Position = UDim2.new(0, 100, 0, 66)
+	descLabel.BackgroundTransparency = 1
+	descLabel.Text = cardDescription or ""
+	descLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+	descLabel.TextSize = 12
+	descLabel.Font = Enum.Font.Gotham
+	descLabel.TextXAlignment = Enum.TextXAlignment.Left
+	descLabel.TextYAlignment = Enum.TextYAlignment.Top
+	descLabel.TextWrapped = true
+	descLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	descLabel.ZIndex = 101
+	
+	-- Slide in animation
+	local slideIn = TweenService:Create(notification, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0.5, -160, 0, 20)
+	})
+	slideIn:Play()
+	
+	-- Hold for 2.5 seconds, then slide out and destroy
+	task.delay(2.5, function()
+		if notification and notification.Parent then
+			local slideOut = TweenService:Create(notification, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Position = UDim2.new(0.5, -160, 0, -130)
+			})
+			slideOut:Play()
+			slideOut.Completed:Connect(function()
+				if notification and notification.Parent then
+					notification:Destroy()
+				end
+			end)
+		end
+	end)
+end
+
 local eventHandlers = {
 	["CardTilesUpdate"] = function(p)
 		-- Clients may show markers; implementation depends on map UI
@@ -419,6 +532,9 @@ local eventHandlers = {
 			playableCardIds[id] = active
 		end
 		updatePlayableHints()
+	end,
+	["CardPlayedBroadcast"] = function(p)
+		showCardPlayedNotification(p.PlayerName, p.PlayerColor, p.CardName, p.CardIcon, p.CardDescription)
 	end
 }
 
