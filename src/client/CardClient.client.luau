@@ -4,6 +4,7 @@ local Players = game:GetService("Players")
 local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local SoundService = game:GetService("SoundService")
 
 local LocalPlayer = Players.LocalPlayer
 local remoteEvent = ReplicatedStorage:WaitForChild("RemoteEvent")
@@ -18,6 +19,12 @@ local slotStates = {} -- slot -> {expanded = bool, collapseTimer = RBXScriptConn
 local COLLAPSE_DELAY = 0.12
 local useConnections = {} -- map slot -> connection for UseButton
 local playableCardIds = {}
+
+-- Error feedback sound
+local errorSound = Instance.new("Sound")
+errorSound.SoundId = "rbxassetid://9113869786" -- UI error/denial sound
+errorSound.Volume = 0.5
+errorSound.Parent = SoundService
 
 local CARD_REQUIRES_TARGET = {
 	starter_move_one = true,
@@ -123,11 +130,103 @@ local function updatePlayableHints()
 	end
 end
 
+-- Shake animation and sound for unplayable card
+local function shakeSlotError(slot)
+	if not slot then return end
+	
+	-- Play error sound
+	errorSound:Play()
+	
+	-- Show "Not Available" text briefly
+	local handFrame = slot.Parent
+	local errorLabel = handFrame and handFrame:FindFirstChild("CardErrorLabel")
+	if not errorLabel then
+		errorLabel = Instance.new("TextLabel")
+		errorLabel.Name = "CardErrorLabel"
+		errorLabel.Size = UDim2.new(0, 200, 0, 40)
+		errorLabel.Position = UDim2.new(0.5, -100, 1, -220)
+		errorLabel.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+		errorLabel.BackgroundTransparency = 0.2
+		errorLabel.BorderSizePixel = 0
+		errorLabel.TextColor3 = Color3.new(1, 1, 1)
+		errorLabel.TextSize = 18
+		errorLabel.Font = Enum.Font.GothamBold
+		errorLabel.Text = "Not available right now!"
+		errorLabel.TextStrokeTransparency = 0.5
+		errorLabel.ZIndex = 10
+		local corner = Instance.new("UICorner", errorLabel)
+		corner.CornerRadius = UDim.new(0, 8)
+		errorLabel.Parent = handFrame
+	end
+	errorLabel.Visible = true
+	errorLabel.TextTransparency = 0
+	errorLabel.BackgroundTransparency = 0.2
+	
+	-- Shake animation
+	local originalPos = slot.Position
+	local shakeAmount = 8
+	local shakeDuration = 0.05
+	
+	for _ = 1, 4 do
+		local offsetX = math.random(-shakeAmount, shakeAmount)
+		local tweenInfo = TweenInfo.new(shakeDuration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local tween = TweenService:Create(slot, tweenInfo, {
+			Position = UDim2.new(originalPos.X.Scale, originalPos.X.Offset + offsetX, originalPos.Y.Scale, originalPos.Y.Offset)
+		})
+		tween:Play()
+		tween.Completed:Wait()
+	end
+	
+	-- Return to original position
+	local returnTween = TweenService:Create(slot, TweenInfo.new(0.05), {Position = originalPos})
+	returnTween:Play()
+	
+	-- Flash red tint on the card
+	local cardImage = slot:FindFirstChild("CardImage")
+	if cardImage then
+		local originalColor = cardImage.ImageColor3
+		cardImage.ImageColor3 = Color3.fromRGB(255, 100, 100)
+		task.delay(0.2, function()
+			if cardImage and cardImage.Parent then
+				cardImage.ImageColor3 = originalColor
+			end
+		end)
+	end
+	
+	-- Fade out error label
+	task.delay(1.2, function()
+		if errorLabel and errorLabel.Parent then
+			local fadeInfo = TweenInfo.new(0.3)
+			local fadeTween = TweenService:Create(errorLabel, fadeInfo, {
+				TextTransparency = 1,
+				BackgroundTransparency = 1
+			})
+			fadeTween:Play()
+			fadeTween.Completed:Connect(function()
+				if errorLabel and errorLabel.Parent then
+					errorLabel.Visible = false
+				end
+			end)
+		end
+	end)
+end
+
+local function isCardPlayable(cardId)
+	return cardId and playableCardIds[cardId] == true
+end
+
 local function requestUseCard(slot)
 	if not slot then return end
 	local uid = slot:GetAttribute("cardUid")
 	if not uid or uid == "" then return end
 	local cardId = slot:GetAttribute("cardId")
+	
+	-- Check if card is playable; if not, show error feedback
+	if not isCardPlayable(cardId) then
+		shakeSlotError(slot)
+		return
+	end
+	
 	if cardId and CARD_REQUIRES_TARGET[cardId] then
 		remoteEvent:FireServer("RequestCardTarget", uid, cardId)
 	else
@@ -288,7 +387,30 @@ local eventHandlers = {
 		-- show popup
 	end,
 	["CardUseResult"] = function(p)
-		-- handled silently on client
+		-- Show error feedback if server rejected the card use
+		if p.Success == false then
+			local handFrame = cardGui and cardGui:FindFirstChild("HandFrame")
+			if handFrame then
+				-- Find the slot that matches the failed card
+				for i = 1, 3 do
+					local slot = handFrame:FindFirstChild("Slot"..i)
+					if slot and slot.Visible and slot:GetAttribute("cardUid") == p.CardUid then
+						shakeSlotError(slot)
+						break
+					end
+				end
+				-- If no specific slot found but still failed, shake first visible slot as fallback
+				if not p.CardUid then
+					for i = 1, 3 do
+						local slot = handFrame:FindFirstChild("Slot"..i)
+						if slot and slot.Visible then
+							shakeSlotError(slot)
+							break
+						end
+					end
+				end
+			end
+		end
 	end,
 	["CardPlayableUpdate"] = function(p)
 		local ids = p.CardIds or {}
