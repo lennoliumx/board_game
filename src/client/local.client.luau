@@ -128,7 +128,9 @@ end)
 
 function setupCamera()
 	local camera = workspace.CurrentCamera
-	local focusPart = workspace:WaitForChild("CameraFocus") -- Ensure this part exists!
+	local currentMap = workspace.CurrentMap:FindFirstChildWhichIsA("Folder")
+	
+	local focusPart = currentMap:FindFirstChild("CameraFocus") -- Ensure this part exists!
 
 	-- Disable default controls
 	local playerModule = require(LocalPlayer:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))

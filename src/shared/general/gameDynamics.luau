@@ -5,9 +5,21 @@ local workspace = game:GetService("Workspace")
 
 local remoteEvent = repStorage:WaitForChild("RemoteEvent")
 local turnIndex = repStorage:WaitForChild("turnIndex")
-local turnOrder = {"red", "blue", "green", "yellow"} -- Standard Ludo Order
 local currentMap = workspace:WaitForChild("CurrentMap"):FindFirstChildOfClass("Folder")
 local cardManager = require(game.ReplicatedStorage.Shared.cardManager)
+local MapConfig = require(game.ReplicatedStorage.Shared.MapConfig)
+local roundSys = require(game.ReplicatedStorage.Shared.general.roundSys)
+
+-- Dynamic turn order from map config
+local turnOrder = nil
+local START_OFFSETS = nil
+local BOARD_SIZE = nil
+
+local function loadMapConfig()
+	turnOrder = MapConfig.GetTurnOrder()
+	START_OFFSETS = MapConfig.GetStartOffsets()
+	BOARD_SIZE = MapConfig.GetBoardSize()
+end
 
 -- Animation Cache
 local animCache = {} 
@@ -53,15 +65,6 @@ local pickedContext = "Move"
 
 -- Debug: forced dice value (Studio only)
 local debugForcedDice = {} -- userId -> forced value (1-6) or nil
-
--- Configuration
-local BOARD_SIZE = 40 -- Standard Ludo board
-local START_OFFSETS = {
-	["red"] = 1,    -- Red starts at tile 1 (adjust based on your map map names)
-	["blue"] = 11,
-	["green"] = 21,
-	["yellow"] = 31
-}
 
 -- [1. Single Permanent Listener] 
 remoteEvent.OnServerEvent:Connect(function(player, action, fig, context)
@@ -192,9 +195,15 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 	-- Determine Final Target (for reference)
 	local finalTargetPart = nil
 	if isGoal then
-		finalTargetPart = currentMap["Spielfeld" .. color:sub(1,1):upper()..color:sub(2)].goalFields:FindFirstChild(tostring(targetIndex))
+		local targetFields = MapConfig.GetTargetFields(color)
+		if targetFields then
+			finalTargetPart = targetFields:FindFirstChild(tostring(targetIndex))
+		end
 	else
-		finalTargetPart = currentMap.Fields:FindFirstChild(tostring(targetIndex))
+		local fieldsFolder = MapConfig.GetFields()
+		if fieldsFolder then
+			finalTargetPart = fieldsFolder:FindFirstChild(tostring(targetIndex))
+		end
 	end
 
 	if shouldTeleport then
@@ -239,9 +248,15 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 
 			local nextPart = nil
 			if stepIsGoal then
-				nextPart = currentMap["Spielfeld" .. color:sub(1,1):upper()..color:sub(2)].goalFields:FindFirstChild(tostring(stepIndex))
+				local targetFields = MapConfig.GetTargetFields(color)
+				if targetFields then
+					nextPart = targetFields:FindFirstChild(tostring(stepIndex))
+				end
 			else
-				nextPart = currentMap.Fields:FindFirstChild(tostring(stepIndex))
+				local fieldsFolder = MapConfig.GetFields()
+				if fieldsFolder then
+					nextPart = fieldsFolder:FindFirstChild(tostring(stepIndex))
+				end
 			end
 
 			if nextPart then
@@ -319,6 +334,11 @@ local function sendCardPlayable(player, cardIds, active)
 	remoteEvent:FireClient(player, { Msg = "CardPlayableUpdate", CardIds = cardIds, Active = active })
 end
 
+local function playerHasCard(player, cardId)
+	if not cardManager or not cardManager.HasCardId then return false end
+	return cardManager.HasCardId(player, cardId)
+end
+
 local function waitForCaptureBonusWindow(player, window)
 	if not player then return end
 	if not playerHasCard(player, "starter_capture_bonus") then return end
@@ -332,11 +352,6 @@ local function waitForCaptureBonusWindow(player, window)
 		task.wait(0.1)
 		waitTime += 0.1
 	end
-end
-
-local function playerHasCard(player, cardId)
-	if not cardManager or not cardManager.HasCardId then return false end
-	return cardManager.HasCardId(player, cardId)
 end
 
 function checkCapture(targetTilePart, movingFigure, movingColor)
@@ -378,18 +393,18 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 					enemy:SetAttribute("tileIndex", 0)   -- 0 means Home
 
 					-- Find Spawn Location
-					local spawnFolder = currentMap["Spielfeld" .. enemyColor:sub(1,1):upper()..enemyColor:sub(2)].spawnFields
+					local spawnFolder = MapConfig.GetSpawnFields(enemyColor)
 					local enemyID = tonumber(enemy:GetAttribute("figureID")) or 1
-					local spawnPart = spawnFolder:GetChildren()[enemyID]
+					local spawnPart = nil
+					if spawnFolder then
+						local spawnChildren = spawnFolder:GetChildren()
+						table.sort(spawnChildren, function(a, b) return a.Name < b.Name end)
+						spawnPart = spawnChildren[enemyID]
+					end
 
-					-- Physical Teleport
+					-- Clean teleport to home spawn
 					if spawnPart then
-						-- Reset velocity so they don't fly away
-						if enemy.PrimaryPart then
-							enemy.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
-							enemy.PrimaryPart.AssemblyAngularVelocity = Vector3.zero
-						end
-						enemy:PivotTo(CFrame.new(spawnPart.CFrame.x,5,spawnPart.Position.z))
+						roundSys.TeleportFigureToSpawn(enemy, spawnPart)
 					end
 
 					-- Capture bonus card cue for capturer
@@ -528,6 +543,9 @@ end
 
 -- [6. Main Loop]
 function gameDynamics.StartGameLoop(playerAssignments)
+	-- Load dynamic configuration from map
+	loadMapConfig()
+	
 	turnIndex.Value = 1
 	-- Set up protection visuals on all figures
 	for _, tuple in pairs(playerAssignments) do
@@ -558,6 +576,11 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				player:SetAttribute("startPlusOnePending", false)
 				player:SetAttribute("captureBonusAvailable", false)
 				player:SetAttribute("captureBonusFigureName", "")
+				
+				-- Reset card usage tracking for this player's new turn
+				if cardManager.ResetTurnCardUsage then
+					cardManager.ResetTurnCardUsage(player)
+				end
 
 				-- Clear left-house markers
 				for _, fig in ipairs(myFigures) do
@@ -628,18 +651,26 @@ function gameDynamics.StartGameLoop(playerAssignments)
 						-- diceResult = 6 --TESTING (LEAVE IT HERE, AI.)
 						player:SetAttribute("hasRolledThisTurn", true)
 
-						-- Optional extra roll card (last roll counts)
+						-- Extra roll handling: open window for potential re-roll BEFORE movement
 						local blockExtra = player:GetAttribute("blockExtraRollOnce") == true
 						if blockExtra then
 							player:SetAttribute("blockExtraRollOnce", false)
-						elseif attempts == 1 and playerHasCard(player, "starter_extra_roll") then
+						elseif attempts == 1 then
+							-- Open the extra roll window - process BEFORE movement so new dice affects the move
 							player:SetAttribute("extraRollWindowOpen", true)
-							sendCardPlayable(player, {"starter_extra_roll"}, true)
+							
+							-- Show hint if player currently has the card
+							if playerHasCard(player, "starter_extra_roll") then
+								sendCardPlayable(player, {"starter_extra_roll"}, true)
+							end
+							
+							-- Wait for extra roll decision BEFORE movement
 							local waitTime = 0
-							local window = 4
+							local window = 8  -- 8 second window to use Extra Roll card
 							while waitTime < window do
 								if player:GetAttribute("extraRollRequested") == true then
 									player:SetAttribute("extraRollRequested", false)
+									-- Re-roll the dice - the new result will be used for movement
 									diceResult = diceFunc(playerAssignments, currentColor)
 									break
 								end
@@ -647,7 +678,6 @@ function gameDynamics.StartGameLoop(playerAssignments)
 								waitTime += 0.1
 							end
 							player:SetAttribute("extraRollWindowOpen", false)
-							-- hide extra roll cue after first roll window
 							sendCardPlayable(player, {"starter_extra_roll"}, false)
 						end
 
@@ -822,7 +852,18 @@ function gameDynamics.StartGameLoop(playerAssignments)
 				end
 			end)
 
-			if turnIndex.Value >= 4 then turnIndex.Value = 1 else turnIndex.Value += 1 end
+			-- Advance turn and broadcast turn change to all clients
+			local nextTurnIndex = turnIndex.Value >= #turnOrder and 1 or turnIndex.Value + 1
+			turnIndex.Value = nextTurnIndex
+			
+			-- Notify all clients of turn change (clears stale card hints)
+			local nextColor = turnOrder[nextTurnIndex]
+			remoteEvent:FireAllClients({
+				Msg = "TurnChanged",
+				TurnIndex = nextTurnIndex,
+				CurrentColor = nextColor
+			})
+			
 			task.wait(0.5)
 		end
 	end)

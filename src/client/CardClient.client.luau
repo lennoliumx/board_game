@@ -1,7 +1,7 @@
 -- Client-side Card GUI handler
+-- Handles card display, animations, and user interactions
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local CollectionService = game:GetService("CollectionService")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local SoundService = game:GetService("SoundService")
@@ -14,26 +14,37 @@ local cardGui = PlayerGui:WaitForChild("CardGui")
 
 local isTouch = UserInputService.TouchEnabled
 
-local slotConnections = {}
-local slotStates = {} -- slot -> {expanded = bool, collapseTimer = RBXScriptConnection or nil}
+-- ============================================================================
+-- STATE
+-- ============================================================================
+local slotConnections = {}    -- slot -> {enter, leave, activated}
+local slotStates = {}         -- slot -> {expanded, hinted, lastClickTime}
+local playableCardIds = {}    -- cardId -> true/false
+local useConnections = {}     -- slot -> connection (legacy)
+
 local COLLAPSE_DELAY = 0.12
-local useConnections = {} -- map slot -> connection for UseButton
-local playableCardIds = {}
+local CLICK_DEBOUNCE = 0.3    -- Seconds between clicks on same card
 
--- Error feedback sound
-local errorSound = Instance.new("Sound")
-errorSound.SoundId = "rbxassetid://9113869786" -- UI error/denial sound
-errorSound.Volume = 0.5
-errorSound.Parent = SoundService
-
+-- Cards that require selecting a figure target
 local CARD_REQUIRES_TARGET = {
 	starter_move_one = true,
 	starter_protect_start = true,
 	starter_start_plus_one = true,
 }
 
+-- Error feedback sound
+local errorSound = Instance.new("Sound")
+errorSound.SoundId = "rbxassetid://9113869786"
+errorSound.Volume = 0.5
+errorSound.Parent = SoundService
+
+-- ============================================================================
+-- TWEEN HELPERS
+-- ============================================================================
+
 local function tweenSlot(slot, toExpanded)
-	if not slot then return end
+	if not slot or not slot.Parent then return end
+	
 	local offset = slot:GetAttribute("hiddenPosX") or 0
 	local hiddenY = slot:GetAttribute("hiddenY") or 40
 	local expandedY = slot:GetAttribute("expandedY") or -160
@@ -49,12 +60,25 @@ local function tweenSlot(slot, toExpanded)
 	if toExpanded then
 		goalPos = UDim2.new(0.5, offset, 1, expandedY)
 		goalSize = UDim2.new(0, eW, 0, eH)
+		-- Bring to front when expanded
+		slot.ZIndex = 10
 	elseif isHinted then
 		goalPos = UDim2.new(0.5, offset, 1, hintY)
 		goalSize = UDim2.new(0, hW, 0, hH)
+		-- Normal z-index when not expanded
+		slot.ZIndex = 1
 	else
 		goalPos = UDim2.new(0.5, offset, 1, hiddenY)
 		goalSize = UDim2.new(0, hW, 0, hH)
+		-- Normal z-index when not expanded
+		slot.ZIndex = 1
+	end
+	
+	-- Also update ZIndex for all descendants so card image/text stays on top
+	for _, child in ipairs(slot:GetDescendants()) do
+		if child:IsA("GuiObject") then
+			child.ZIndex = toExpanded and 11 or 2
+		end
 	end
 
 	local props = {Position = goalPos, Size = goalSize}
@@ -109,23 +133,42 @@ local function tweenSlotHint(slot, toHinted)
 end
 
 local function setSlotHint(slot, on)
-	if not slot then return end
+	if not slot or not slot.Parent then return end
 	slotStates[slot] = slotStates[slot] or {}
 	slotStates[slot].hinted = on
 	if slotStates[slot].expanded then return end
 	tweenSlotHint(slot, on)
 end
 
+local function clearAllPlayableHints()
+	-- Clear all playable states
+	table.clear(playableCardIds)
+	
+	if not cardGui then return end
+	local handFrame = cardGui:FindFirstChild("HandFrame")
+	if not handFrame then return end
+	
+	for i = 1, 3 do
+		local slot = handFrame:FindFirstChild("Slot"..i)
+		if slot then
+			setSlotHint(slot, false)
+		end
+	end
+end
+
 local function updatePlayableHints()
 	if not cardGui then return end
 	local handFrame = cardGui:FindFirstChild("HandFrame")
 	if not handFrame then return end
+	
 	for i = 1, 3 do
 		local slot = handFrame:FindFirstChild("Slot"..i)
 		if slot and slot.Visible then
 			local cardId = slot:GetAttribute("cardId")
-			local shouldHint = cardId and playableCardIds[cardId] == true
+			local shouldHint = cardId and cardId ~= "" and playableCardIds[cardId] == true
 			setSlotHint(slot, shouldHint)
+		else
+			setSlotHint(slot, false)
 		end
 	end
 end
@@ -215,14 +258,33 @@ local function isCardPlayable(cardId)
 	return cardId and playableCardIds[cardId] == true
 end
 
+-- Cards that should bypass client-side playability check and let server validate
+-- These cards have tight timing windows where client state might be stale
+local BYPASS_CLIENT_CHECK = {
+	starter_extra_roll = true,
+	starter_capture_bonus = true,
+}
+
 local function requestUseCard(slot)
-	if not slot then return end
+	if not slot or not slot.Parent then return end
+	
 	local uid = slot:GetAttribute("cardUid")
 	if not uid or uid == "" then return end
+	
 	local cardId = slot:GetAttribute("cardId")
+	if not cardId or cardId == "" then return end
+	
+	-- Debounce rapid clicks on same card
+	slotStates[slot] = slotStates[slot] or {}
+	local now = tick()
+	if slotStates[slot].lastClickTime and (now - slotStates[slot].lastClickTime) < CLICK_DEBOUNCE then
+		return
+	end
+	slotStates[slot].lastClickTime = now
 	
 	-- Check if card is playable; if not, show error feedback
-	if not isCardPlayable(cardId) then
+	-- Some cards with tight timing windows bypass this check and let server validate
+	if not BYPASS_CLIENT_CHECK[cardId] and not isCardPlayable(cardId) then
 		shakeSlotError(slot)
 		return
 	end
@@ -375,13 +437,20 @@ local function renderHand(cards)
 	updatePlayableHints()
 end
 
--- Color lookup for player colors
+-- Dynamic color lookup for player colors (updated from server)
 local COLOR_MAP = {
+	-- Default fallback colors
 	red = Color3.fromRGB(220, 60, 60),
 	blue = Color3.fromRGB(60, 120, 220),
 	green = Color3.fromRGB(60, 180, 60),
 	yellow = Color3.fromRGB(220, 200, 60),
 }
+
+-- Function to get display color (with fallback)
+local function getDisplayColor(slotName)
+	if not slotName then return Color3.fromRGB(150, 150, 150) end
+	return COLOR_MAP[slotName:lower()] or Color3.fromRGB(150, 150, 150)
+end
 
 -- Show card played notification to all players
 local function showCardPlayedNotification(playerName, playerColor, cardName, cardIcon, cardDescription)
@@ -404,7 +473,7 @@ local function showCardPlayedNotification(playerName, playerColor, cardName, car
 	colorBar.Name = "ColorBar"
 	colorBar.Size = UDim2.new(0, 6, 1, -16)
 	colorBar.Position = UDim2.new(0, 8, 0, 8)
-	colorBar.BackgroundColor3 = COLOR_MAP[playerColor] or Color3.fromRGB(150, 150, 150)
+	colorBar.BackgroundColor3 = getDisplayColor(playerColor)
 	colorBar.BorderSizePixel = 0
 	local colorBarCorner = Instance.new("UICorner", colorBar)
 	colorBarCorner.CornerRadius = UDim.new(0, 3)
@@ -430,7 +499,7 @@ local function showCardPlayedNotification(playerName, playerColor, cardName, car
 	headerLabel.Position = UDim2.new(0, 100, 0, 12)
 	headerLabel.BackgroundTransparency = 1
 	headerLabel.Text = playerName .. " played:"
-	headerLabel.TextColor3 = COLOR_MAP[playerColor] or Color3.new(1, 1, 1)
+	headerLabel.TextColor3 = getDisplayColor(playerColor)
 	headerLabel.TextSize = 16
 	headerLabel.Font = Enum.Font.GothamBold
 	headerLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -489,52 +558,90 @@ local function showCardPlayedNotification(playerName, playerColor, cardName, car
 end
 
 local eventHandlers = {
+	["MapConfigUpdate"] = function(p)
+		-- Update color map with dynamic colors from server
+		if p.DisplayColors then
+			for slotName, color in pairs(p.DisplayColors) do
+				COLOR_MAP[slotName:lower()] = color
+			end
+		end
+	end,
+	
 	["CardTilesUpdate"] = function(p)
 		-- Clients may show markers; implementation depends on map UI
 		-- p.Tiles is a list of part names
 	end,
+	
 	["CardHandUpdate"] = function(p)
 		renderHand(p.Cards)
 	end,
+	
 	["CardGranted"] = function(p)
-		-- show popup
+		-- Could show popup notification when card is granted
 	end,
+	
 	["CardUseResult"] = function(p)
-		-- Show error feedback if server rejected the card use
 		if p.Success == false then
+			-- Show error feedback
 			local handFrame = cardGui and cardGui:FindFirstChild("HandFrame")
-			if handFrame then
-				-- Find the slot that matches the failed card
+			if not handFrame then return end
+			
+			-- Find the slot that matches the failed card
+			local foundSlot = nil
+			if p.CardUid then
 				for i = 1, 3 do
 					local slot = handFrame:FindFirstChild("Slot"..i)
 					if slot and slot.Visible and slot:GetAttribute("cardUid") == p.CardUid then
-						shakeSlotError(slot)
+						foundSlot = slot
 						break
 					end
 				end
-				-- If no specific slot found but still failed, shake first visible slot as fallback
-				if not p.CardUid then
-					for i = 1, 3 do
-						local slot = handFrame:FindFirstChild("Slot"..i)
-						if slot and slot.Visible then
-							shakeSlotError(slot)
-							break
-						end
+			end
+			
+			-- Fallback to first visible slot if no specific match
+			if not foundSlot then
+				for i = 1, 3 do
+					local slot = handFrame:FindFirstChild("Slot"..i)
+					if slot and slot.Visible then
+						foundSlot = slot
+						break
 					end
 				end
 			end
+			
+			if foundSlot then
+				shakeSlotError(foundSlot)
+			end
 		end
 	end,
+	
 	["CardPlayableUpdate"] = function(p)
 		local ids = p.CardIds or {}
 		local active = p.Active == true
-		for _, id in ipairs(ids) do
-			playableCardIds[id] = active
+		
+		for _, cardId in ipairs(ids) do
+			if active then
+				playableCardIds[cardId] = true
+			else
+				playableCardIds[cardId] = nil
+			end
 		end
+		
 		updatePlayableHints()
 	end,
+	
+	["CardPlayableClearAll"] = function(p)
+		-- Clear all playable hints (sent at turn end)
+		clearAllPlayableHints()
+	end,
+	
 	["CardPlayedBroadcast"] = function(p)
 		showCardPlayedNotification(p.PlayerName, p.PlayerColor, p.CardName, p.CardIcon, p.CardDescription)
+	end,
+	
+	["TurnChanged"] = function(p)
+		-- Clear card playable hints when turn changes
+		clearAllPlayableHints()
 	end
 }
 
