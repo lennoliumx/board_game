@@ -35,44 +35,62 @@ end
 ensureCollisionGroupsRegistered()
 
 -- Helper: Cleanly teleport a figure to a spawn part without physics scatter
-local function teleportFigureToSpawn(figure, spawnPart)
+-- When inHouse is true, keeps the HumanoidRootPart anchored to prevent drift
+local function teleportFigureToSpawn(figure, spawnPart, inHouse)
 	if not figure or not spawnPart then return end
 	
-	local targetCFrame = CFrame.new(spawnPart.CFrame.X, 5, spawnPart.CFrame.Z)
+	-- Use spawn part position with fixed Y height
+	-- Create an UPRIGHT CFrame (no tilt/rotation except Y facing)
+	local spawnPos = Vector3.new(spawnPart.CFrame.X, spawnPart.CFrame.Y + 3, spawnPart.CFrame.Z)
+	local _, yRot, _ = spawnPart.CFrame:ToOrientation()
+	local targetCFrame = CFrame.new(spawnPos) * CFrame.Angles(0, yRot, 0)
 	
-	-- Temporarily anchor all parts, reset velocities, then position
-	local partsToRestore = {}
+	-- For humanoid figures, work with HumanoidRootPart and Humanoid
+	local hrp = figure:FindFirstChild("HumanoidRootPart")
+	local humanoid = figure:FindFirstChildOfClass("Humanoid")
+	
+	-- Stop all physics movement first
 	for _, part in ipairs(figure:GetDescendants()) do
 		if part:IsA("BasePart") then
-			-- Store original anchor state
-			partsToRestore[part] = part.Anchored
-			-- Reset velocities
 			part.AssemblyLinearVelocity = Vector3.zero
 			part.AssemblyAngularVelocity = Vector3.zero
-			-- Temporarily anchor
-			part.Anchored = true
 		end
 	end
 	
-	-- Move the figure
+	-- Ensure humanoid is in proper standing state
+	if humanoid then
+		humanoid.PlatformStand = false
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+		task.wait()
+		humanoid:ChangeState(Enum.HumanoidStateType.Running)
+	end
+	
+	-- Move the figure to upright position
 	figure:PivotTo(targetCFrame)
 	
-	-- Wait a frame for physics to register the new position
-	task.defer(function()
-		-- Restore original anchor states
-		for part, wasAnchored in pairs(partsToRestore) do
-			if part and part.Parent then
-				part.Anchored = wasAnchored
-				-- Final velocity reset after unanchoring
-				part.AssemblyLinearVelocity = Vector3.zero
-				part.AssemblyAngularVelocity = Vector3.zero
-			end
-		end
-	end)
+	-- If in house, anchor HumanoidRootPart to prevent physics scatter
+	if inHouse == true and hrp then
+		hrp.Anchored = true
+		-- Reset velocities again after anchoring
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end
+end
+
+-- Helper: Unanchor a figure when it leaves the house
+local function unanchorFigure(figure)
+	if not figure then return end
+	local hrp = figure:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Anchored = false
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end
 end
 
 -- Expose for use by other modules
 roundSys.TeleportFigureToSpawn = teleportFigureToSpawn
+roundSys.UnanchorFigure = unanchorFigure
 
 local function initPlayerAssignments()
 	if not playerAssignments then
@@ -159,8 +177,8 @@ function roundSys.spawnChars()
 					clone.PrimaryPart.CollisionGroup = "FigureGroup"
 				end
 
-				-- Use clean teleport to prevent physics scatter
-				teleportFigureToSpawn(clone, slotSpawns[i])
+				-- Use clean teleport to prevent physics scatter (inHouse = true keeps them anchored)
+				teleportFigureToSpawn(clone, slotSpawns[i], true)
 
 				-- Idle Anim
 				local animator = clone.Humanoid:FindFirstChild("Animator") or Instance.new("Animator", clone.Humanoid)

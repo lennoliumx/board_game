@@ -209,6 +209,9 @@ function moveFigure(figure, targetIndex, isGoal, newStepsTotal, color, shouldTel
 	if shouldTeleport then
 		-- >>> TELEPORT LOGIC (House -> Start) <<<
 		if finalTargetPart then
+			-- Unanchor figure first (they were anchored while in house)
+			roundSys.UnanchorFigure(figure)
+			
 			-- Force Y to +3 studs above the tile to prevent floor clipping
 			local targetPosition = finalTargetPart.Position + Vector3.new(0, 3, 0)
 
@@ -402,9 +405,9 @@ function checkCapture(targetTilePart, movingFigure, movingColor)
 						spawnPart = spawnChildren[enemyID]
 					end
 
-					-- Clean teleport to home spawn
+					-- Clean teleport to home spawn (inHouse = true keeps them anchored)
 					if spawnPart then
-						roundSys.TeleportFigureToSpawn(enemy, spawnPart)
+						roundSys.TeleportFigureToSpawn(enemy, spawnPart, true)
 					end
 
 					-- Capture bonus card cue for capturer
