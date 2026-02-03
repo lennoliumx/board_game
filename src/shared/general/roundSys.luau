@@ -10,6 +10,8 @@ local currentMap = workspace:WaitForChild("CurrentMap"):FindFirstChildOfClass("F
 local figuresFolder = workspace:WaitForChild("Figures")
 local remoteEvent = repStorage.RemoteEvent
 
+local figureLookAtPart = currentMap:FindFirstChild("figureLookAtPart")
+
 local roundSys = {} 
 
 -- Dynamic player assignments based on map config
@@ -39,11 +41,12 @@ ensureCollisionGroupsRegistered()
 local function teleportFigureToSpawn(figure, spawnPart, inHouse)
 	if not figure or not spawnPart then return end
 	
+	local figPrimPart = figure.PrimaryPart
+
 	-- Use spawn part position with fixed Y height
 	-- Create an UPRIGHT CFrame (no tilt/rotation except Y facing)
 	local spawnPos = Vector3.new(spawnPart.CFrame.X, spawnPart.CFrame.Y + 3, spawnPart.CFrame.Z)
-	local _, yRot, _ = spawnPart.CFrame:ToOrientation()
-	local targetCFrame = CFrame.new(spawnPos) * CFrame.Angles(0, yRot, 0)
+	local targetCFrame = CFrame.new(spawnPos)
 	
 	-- For humanoid figures, work with HumanoidRootPart and Humanoid
 	local hrp = figure:FindFirstChild("HumanoidRootPart")
@@ -67,6 +70,7 @@ local function teleportFigureToSpawn(figure, spawnPart, inHouse)
 	
 	-- Move the figure to upright position
 	figure:PivotTo(targetCFrame)
+	figPrimPart.CFrame = CFrame.lookAt(spawnPos, figureLookAtPart.Position)
 	
 	-- If in house, anchor HumanoidRootPart to prevent physics scatter
 	if inHouse == true and hrp then
